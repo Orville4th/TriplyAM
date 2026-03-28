@@ -27,8 +27,13 @@ jobs:
         run: |
           pyinstaller triply.spec --clean
 
-      - name: Upload Windows build
+      - name: Create installer with Inno Setup
+        run: |
+          choco install innosetup -y
+          iscc installer.iss
+
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: Triply-Windows-${{ github.ref_name }}
-          path: dist/Triply/
+          name: Triply-Setup-${{ github.ref_name }}
+          path: Triply-Setup.exe
