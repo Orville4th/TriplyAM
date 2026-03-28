@@ -13,7 +13,19 @@ mkdir -p AppDir_simple/usr/share/applications
 mkdir -p AppDir_simple/usr/share/icons/hicolor/256x256/apps
 
 cp -r src/ AppDir_simple/usr/src/
-cp -r venv/ AppDir_simple/usr/venv/ 2>/dev/null || true
+
+# Use existing venv if available, otherwise create one
+if [ -d "venv" ]; then
+    echo "Using existing venv..."
+    cp -r venv/ AppDir_simple/usr/venv/
+else
+    echo "Creating venv and installing dependencies..."
+    python3 -m venv AppDir_simple/usr/venv
+    AppDir_simple/usr/venv/bin/pip install --quiet \
+        PyQt6 PyOpenGL PyOpenGL_accelerate numpy numpy-stl \
+        scikit-image scipy meshlib manifold3d cadquery \
+        pyvista pymeshfix
+fi
 
 # Generate icon
 python3 -c "
@@ -58,13 +70,11 @@ APPRUN
 chmod +x AppDir_simple/AppRun
 
 # Find appimagetool
-APPIMAGETOOL=""
 if command -v appimagetool &>/dev/null; then
     APPIMAGETOOL="appimagetool"
 elif [ -f "$HOME/tools/appimagetool" ]; then
     APPIMAGETOOL="$HOME/tools/appimagetool"
 else
-    echo "Downloading appimagetool..."
     wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
     chmod +x /tmp/appimagetool
     APPIMAGETOOL="/tmp/appimagetool"
@@ -75,5 +85,4 @@ ARCH=x86_64 $APPIMAGETOOL AppDir_simple "$OUTPUT" 2>&1 | tail -5
 mkdir -p "$(dirname "$0")/../Releases/${VERSION}" 2>/dev/null || true
 cp "$OUTPUT" "$(dirname "$0")/../Releases/${VERSION}/" 2>/dev/null || true
 
-echo ""
 echo "✓ Built: $OUTPUT ($(du -sh $OUTPUT | cut -f1))"
