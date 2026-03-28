@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+AppDir/
+AppDir_simple/
+*.AppImage
+*.egg-info/
+.DS_Store
+*.stl
+*.3mf
+Repair/
+fix*.py

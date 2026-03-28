@@ -1,0 +1,12 @@
+PyQt6
+PyOpenGL
+PyOpenGL_accelerate
+numpy
+numpy-stl
+scikit-image
+scipy
+meshlib
+manifold3d
+cadquery
+pyvista
+pymeshfix

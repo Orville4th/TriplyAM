@@ -1,0 +1,9 @@
+{
+  "default_printer": "Formlabs Fuse 1+ 30W (SLS)",
+  "custom_printers": {},
+  "mouse_orbit": "Right Button",
+  "mouse_pan": "Middle Button",
+  "pack_exact": true,
+  "last_import_dir": "/home/orvilleiv/Desktop/Triply Development/Test Models",
+  "last_export_dir": "/home/orvilleiv/Desktop/Triply Development/Test Export Models"
+}
