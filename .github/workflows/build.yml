@@ -41,10 +41,10 @@ jobs:
           name: Triply ${{ github.ref_name }}
           body: |
             ## Triply AM Tools ${{ github.ref_name }}
-            
+
             ### Windows
             Download and run `Triply-Setup.exe`
-            
+
             ### Linux
             Download `Triply-*-x86_64.AppImage`, make executable and run:
 ```
@@ -67,9 +67,9 @@ jobs:
       - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libglib2.0-0 libxcb-xinerama0 fuse
+          sudo apt-get install -y libgl1-mesa-dev libglib2.0-0 libxcb-xinerama0
 
-      - name: Install Python deps and create venv
+      - name: Install Python deps into venv
         run: |
           python3 -m venv venv
           source venv/bin/activate
@@ -85,7 +85,7 @@ jobs:
       - name: Build AppImage
         run: |
           chmod +x build_appimage.sh
-          ./build_appimage.sh ${{ github.ref_name }}
+          APPIMAGE_EXTRACT_AND_RUN=1 ./build_appimage.sh ${{ github.ref_name }}
 
       - name: Upload AppImage to Release
         uses: softprops/action-gh-release@v2
