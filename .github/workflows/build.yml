@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -32,29 +35,27 @@ jobs:
           choco install innosetup -y
           iscc installer.iss
 
-      - name: Create GitHub Release and upload installer
+      - name: Upload installer to Release
         uses: softprops/action-gh-release@v2
         with:
           name: Triply ${{ github.ref_name }}
           body: |
             ## Triply AM Tools ${{ github.ref_name }}
             
-            ### Windows Installation
-            1. Download `Triply-Setup.exe` below
-            2. Run the installer
-            3. Launch Triply from your Desktop or Start Menu
+            ### Windows
+            Download and run `Triply-Setup.exe`
             
             ### Linux
-            Download the AppImage from the Linux release assets.
-            
+            Download `Triply-*-x86_64.AppImage`, make executable and run:
+```
+            chmod +x Triply-*.AppImage
+            ./Triply-*.AppImage
+```
           files: Triply-Setup.exe
-          draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -63,22 +64,23 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install system dependencies
+      - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgl1-mesa-dev libglib2.0-0 libxcb-xinerama0
+          sudo apt-get install -y libgl1-mesa-dev libglib2.0-0 libxcb-xinerama0 fuse
 
-      - name: Install Python dependencies
+      - name: Install Python deps and create venv
         run: |
+          python3 -m venv venv
+          source venv/bin/activate
           pip install PyQt6 PyOpenGL PyOpenGL_accelerate numpy numpy-stl
           pip install scikit-image scipy meshlib manifold3d cadquery
           pip install pyvista pymeshfix
 
       - name: Install appimagetool
         run: |
-          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
-          chmod +x appimagetool-x86_64.AppImage
-          sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O /usr/local/bin/appimagetool
+          chmod +x /usr/local/bin/appimagetool
 
       - name: Build AppImage
         run: |
@@ -91,5 +93,3 @@ jobs:
           name: Triply ${{ github.ref_name }}
           files: "*.AppImage"
           prerelease: ${{ contains(github.ref_name, 'beta') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
