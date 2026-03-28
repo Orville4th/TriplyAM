@@ -1,6 +1,4 @@
 #!/bin/bash
-# Triply AppImage Builder
-# Run this script to create a new AppImage from current source
 set -e
 cd "$(dirname "$(readlink -f "$0")")"
 
@@ -9,24 +7,16 @@ OUTPUT="Triply-${VERSION}-x86_64.AppImage"
 
 echo "Building Triply ${VERSION} AppImage..."
 
-# Clean
 rm -rf AppDir_simple
-
-# Create structure
 mkdir -p AppDir_simple/usr/src
 mkdir -p AppDir_simple/usr/share/applications
 mkdir -p AppDir_simple/usr/share/icons/hicolor/256x256/apps
 
-# Copy source and venv
 cp -r src/ AppDir_simple/usr/src/
-cp -r venv/ AppDir_simple/usr/venv/
+cp -r venv/ AppDir_simple/usr/venv/ 2>/dev/null || true
 
-# Icon
-if [ -f "assets/triply.png" ]; then
-    cp assets/triply.png AppDir_simple/triply.png
-    cp assets/triply.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triply.png
-else
-    python3 -c "
+# Generate icon
+python3 -c "
 import struct,zlib
 w,h=256,256
 img=[]
@@ -43,11 +33,9 @@ raw=b''.join(b'\x00'+r for r in img)
 data=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b''))
 open('/tmp/triply.png','wb').write(data)
 "
-    cp /tmp/triply.png AppDir_simple/triply.png
-    cp /tmp/triply.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triply.png
-fi
+cp /tmp/triply.png AppDir_simple/triply.png
+cp /tmp/triply.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triply.png
 
-# Desktop file
 cat > AppDir_simple/triply.desktop << 'DESKTOP'
 [Desktop Entry]
 Name=Triply
@@ -59,7 +47,6 @@ Categories=Graphics;
 DESKTOP
 cp AppDir_simple/triply.desktop AppDir_simple/usr/share/applications/triply.desktop
 
-# AppRun
 cat > AppDir_simple/AppRun << 'APPRUN'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
@@ -70,13 +57,23 @@ exec "${HERE}/usr/venv/bin/python3" "${HERE}/usr/src/src/main.py" "$@"
 APPRUN
 chmod +x AppDir_simple/AppRun
 
-# Build
-ARCH=x86_64 ~/tools/appimagetool AppDir_simple "$OUTPUT" 2>&1 | tail -5
+# Find appimagetool
+APPIMAGETOOL=""
+if command -v appimagetool &>/dev/null; then
+    APPIMAGETOOL="appimagetool"
+elif [ -f "$HOME/tools/appimagetool" ]; then
+    APPIMAGETOOL="$HOME/tools/appimagetool"
+else
+    echo "Downloading appimagetool..."
+    wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
+    chmod +x /tmp/appimagetool
+    APPIMAGETOOL="/tmp/appimagetool"
+fi
 
-# Copy to releases
-mkdir -p "$(dirname "$0")/../Releases/${VERSION}"
-cp "$OUTPUT" "$(dirname "$0")/../Releases/${VERSION}/"
+ARCH=x86_64 $APPIMAGETOOL AppDir_simple "$OUTPUT" 2>&1 | tail -5
+
+mkdir -p "$(dirname "$0")/../Releases/${VERSION}" 2>/dev/null || true
+cp "$OUTPUT" "$(dirname "$0")/../Releases/${VERSION}/" 2>/dev/null || true
 
 echo ""
 echo "✓ Built: $OUTPUT ($(du -sh $OUTPUT | cut -f1))"
-echo "✓ Copied to Releases/${VERSION}/"
