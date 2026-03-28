@@ -43,14 +43,12 @@ jobs:
             ## Triply AM Tools ${{ github.ref_name }}
 
             ### Windows
-            Download and run `Triply-Setup.exe`
+            Download and run Triply-Setup.exe
 
             ### Linux
-            Download `Triply-*-x86_64.AppImage`, make executable and run:
-```
-            chmod +x Triply-*.AppImage
-            ./Triply-*.AppImage
-```
+            Download Triply-x86_64.AppImage, then run:
+              chmod +x Triply-*.AppImage
+              ./Triply-*.AppImage
           files: Triply-Setup.exe
           prerelease: ${{ contains(github.ref_name, 'beta') }}
 
