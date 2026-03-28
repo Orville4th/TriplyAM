@@ -49,7 +49,7 @@ jobs:
             Download Triply-x86_64.AppImage, then run:
               chmod +x Triply-*.AppImage
               ./Triply-*.AppImage
-          files: Triply-Setup.exe
+          files: Output/Triply-Setup.exe
           prerelease: ${{ contains(github.ref_name, 'beta') }}
 
   build-linux:
