@@ -13,6 +13,7 @@ echo "Building Triply ${VERSION} AppImage..."
 rm -rf AppDir_simple
 
 mkdir -p AppDir_simple/usr/src
+mkdir -p AppDir_simple/usr/lib
 mkdir -p AppDir_simple/usr/share/applications
 mkdir -p AppDir_simple/usr/share/icons/hicolor/256x256/apps
 
@@ -65,6 +66,21 @@ else
         pyvista pymeshfix
 fi
 
+# CRITICAL FIX: Bundle libpython3.x.so so the AppImage works on machines
+# that don't have the same Python version installed.
+PYTHON_BIN="AppDir_simple/usr/venv/bin/python3"
+echo "Bundling Python shared libraries..."
+
+for LIB in $(ldd "$PYTHON_BIN" 2>/dev/null | grep -oP '(?<=> )/[^ ]+' | grep -v 'ld-linux'); do
+    LIBNAME=$(basename "$LIB")
+    if echo "$LIBNAME" | grep -qE '^(libpython|libssl|libcrypto|libffi|libbz2|liblzma|libsqlite|libreadline|libncurses|libtinfo|libz\.so)'; then
+        if [ -f "$LIB" ] && [ ! -f "AppDir_simple/usr/lib/$LIBNAME" ]; then
+            echo "  Bundling: $LIBNAME"
+            cp "$LIB" "AppDir_simple/usr/lib/$LIBNAME"
+        fi
+    fi
+done
+
 # Generate icon
 python3 -c "
 import struct,zlib
@@ -104,10 +120,11 @@ cat > AppDir_simple/AppRun << 'APPRUN'
 
 HERE="$(dirname "$(readlink -f "${0}")")"
 
+# Bundle our own libs first — libpython and friends
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/venv/lib:${LD_LIBRARY_PATH}"
 export PYTHONPATH="${HERE}/usr/src/src:${PYTHONPATH}"
-export LD_LIBRARY_PATH="${HERE}/usr/venv/lib:${LD_LIBRARY_PATH}"
 
-# Wayland/X11 detection — GLX requires X11; on pure Wayland use EGL instead
+# Wayland/X11 detection
 if [ -n "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
     export PYOPENGL_PLATFORM=egl
     export QT_QPA_PLATFORM=wayland
@@ -116,22 +133,20 @@ else
     export QT_QPA_PLATFORM=xcb
 fi
 
-# Log file for crash diagnostics
 LOG="$HOME/.triply-crash.log"
+: > "$LOG"
 
 PYTHON="${HERE}/usr/venv/bin/python3"
 
 if [ ! -f "$PYTHON" ]; then
     echo "ERROR: Bundled Python not found at $PYTHON" | tee "$LOG"
-    echo "Please report this at https://github.com/Orville4th/TriplyAM/issues" | tee -a "$LOG"
     exit 1
 fi
 
 exec "$PYTHON" "${HERE}/usr/src/src/main.py" "$@" 2>>"$LOG" 1>>"$LOG" &
 TRIPLY_PID=$!
 
-# Give it 3 seconds to either show a window or die
-sleep 3
+sleep 5
 if ! kill -0 $TRIPLY_PID 2>/dev/null; then
     echo ""
     echo "Triply failed to start. Error log: $LOG"
