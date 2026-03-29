@@ -5,10 +5,12 @@ Full rebuild with selection, gizmo, section caps.
 
 import numpy as np
 import math
+import ctypes
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QRect
 from PyQt6.QtGui import QPainter, QColor, QFont, QPen, QDragEnterEvent, QDropEvent
 from OpenGL.GL import *
+from OpenGL.GL import glDeleteBuffers  # explicit for VBO cleanup
 
 
 def _perspective(fov, aspect, near, far):
@@ -106,20 +108,62 @@ class Viewport3D(QOpenGLWidget):
     # ------------------------------------------------------------------
     # Mesh API
     # ------------------------------------------------------------------
+    def _upload_vbo(self, idx):
+        """Upload mesh data to GPU as VBO. Called after verts/normals/faces change."""
+        mesh = self._meshes[idx]
+        self.makeCurrent()
+        from OpenGL.GL import glGenBuffers, glBindBuffer, glBufferData, GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW
+        # Interleaved: [x,y,z, nx,ny,nz] per vertex  (6 floats = 24 bytes)
+        verts   = mesh['verts']
+        normals = mesh['normals']
+        interleaved = np.empty((len(verts), 6), dtype=np.float32)
+        interleaved[:, :3] = verts
+        interleaved[:, 3:] = normals
+        data_bytes  = interleaved.astype(np.float32).tobytes()
+        index_bytes = mesh['faces'].astype(np.uint32).tobytes()
+
+        # Clean up old VBOs if they exist
+        old_vbo = mesh.get('vbo_vert')
+        old_ibo = mesh.get('vbo_idx')
+        if old_vbo: glDeleteBuffers(1, [old_vbo])
+        if old_ibo: glDeleteBuffers(1, [old_ibo])
+
+        vbo = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, len(data_bytes), data_bytes, GL_STATIC_DRAW)
+        glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+        ibo = glGenBuffers(1)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, len(index_bytes), index_bytes, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0)
+
+        mesh['vbo_vert'] = vbo
+        mesh['vbo_idx']  = ibo
+        mesh['vbo_count'] = len(mesh['faces']) * 3
+
     def add_mesh(self, vertices, faces, color=(0.65,0.65,0.65)):
         normals = self._compute_normals(vertices, faces)
         idx = self._next_idx; self._next_idx += 1
         self._meshes[idx] = {
-            'verts':   np.ascontiguousarray(vertices, dtype=np.float32),
-            'normals': np.ascontiguousarray(normals,  dtype=np.float32),
-            'faces':   np.ascontiguousarray(faces,    dtype=np.int32),
-            'color':   color, 'visible': True,
-            'offset':  np.zeros(3, dtype=np.float32), 'alpha': 1.0,
+            'verts':    np.ascontiguousarray(vertices, dtype=np.float32),
+            'normals':  np.ascontiguousarray(normals,  dtype=np.float32),
+            'faces':    np.ascontiguousarray(faces,    dtype=np.int32),
+            'color':    color, 'visible': True,
+            'offset':   np.zeros(3, dtype=np.float32), 'alpha': 1.0,
+            'vbo_vert': None, 'vbo_idx': None, 'vbo_count': 0,
         }
+        self._upload_vbo(idx)
         self.update(); return idx
 
     def remove_mesh(self, idx):
-        if idx in self._meshes: del self._meshes[idx]; self.update()
+        if idx in self._meshes:
+            mesh = self._meshes[idx]
+            self.makeCurrent()
+            if mesh.get('vbo_vert'): glDeleteBuffers(1, [mesh['vbo_vert']])
+            if mesh.get('vbo_idx'):  glDeleteBuffers(1, [mesh['vbo_idx']])
+            del self._meshes[idx]
+            self.update()
 
     def update_mesh(self, idx, vertices, faces):
         if idx in self._meshes:
@@ -127,6 +171,7 @@ class Viewport3D(QOpenGLWidget):
             self._meshes[idx]['verts']   = np.ascontiguousarray(vertices, dtype=np.float32)
             self._meshes[idx]['normals'] = np.ascontiguousarray(normals,  dtype=np.float32)
             self._meshes[idx]['faces']   = np.ascontiguousarray(faces,    dtype=np.int32)
+            self._upload_vbo(idx)
             if self._selected == idx:
                 v = self._meshes[idx]['verts'] + self._meshes[idx]['offset']
                 self._gizmo_center = (v.max(axis=0)+v.min(axis=0))/2.0
@@ -265,20 +310,58 @@ class Viewport3D(QOpenGLWidget):
         r,g,b = mesh['color']
         if selected:
             r=min(1.0,r*1.4+0.1); g=min(1.0,g*1.4+0.1); b=min(1.0,b*1.4+0.1)
-        if self._wireframe:
-            glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
-        # Use immediate mode (glBegin/glEnd) — works in all frozen contexts
-        import numpy as _np
-        verts = mesh['verts']; normals = mesh['normals']; faces = mesh['faces']
-        glColor3f(r,g,b)
-        glBegin(GL_TRIANGLES)
-        for tri in faces:
-            for vi in tri:
-                glNormal3f(float(normals[vi,0]),float(normals[vi,1]),float(normals[vi,2]))
-                glVertex3f(float(verts[vi,0]),float(verts[vi,1]),float(verts[vi,2]))
-        glEnd()
-        if self._wireframe:
-            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        glColor3f(r, g, b)
+
+        vbo = mesh.get('vbo_vert')
+        ibo = mesh.get('vbo_idx')
+        count = mesh.get('vbo_count', 0)
+
+        if vbo and ibo and count > 0:
+            # ── Fast VBO path ────────────────────────────────────────────────
+            # Interleaved layout: [x,y,z, nx,ny,nz] = 6 floats = 24 bytes/vertex
+            from OpenGL.GL import (
+                glBindBuffer, GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER,
+                glEnableClientState, glDisableClientState,
+                GL_VERTEX_ARRAY, GL_NORMAL_ARRAY,
+                glVertexPointer, glNormalPointer,
+                GL_FLOAT, GL_UNSIGNED_INT,
+                glDrawElements, GL_TRIANGLES,
+            )
+            if self._wireframe:
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+
+            STRIDE = 24  # 6 floats * 4 bytes
+            glBindBuffer(GL_ARRAY_BUFFER, vbo)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo)
+
+            glEnableClientState(GL_VERTEX_ARRAY)
+            glEnableClientState(GL_NORMAL_ARRAY)
+            glVertexPointer(3, GL_FLOAT, STRIDE, None)           # offset 0
+            glNormalPointer(GL_FLOAT,    STRIDE, ctypes.c_void_p(12))  # offset 12
+
+            glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, None)
+
+            glDisableClientState(GL_NORMAL_ARRAY)
+            glDisableClientState(GL_VERTEX_ARRAY)
+            glBindBuffer(GL_ARRAY_BUFFER, 0)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0)
+
+            if self._wireframe:
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        else:
+            # ── Fallback: immediate mode (used before VBO is ready) ──────────
+            import numpy as _np
+            verts = mesh['verts']; normals = mesh['normals']; faces = mesh['faces']
+            if self._wireframe:
+                glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+            glBegin(GL_TRIANGLES)
+            for tri in faces:
+                for vi in tri:
+                    glNormal3f(float(normals[vi,0]),float(normals[vi,1]),float(normals[vi,2]))
+                    glVertex3f(float(verts[vi,0]),float(verts[vi,1]),float(verts[vi,2]))
+            glEnd()
+            if self._wireframe:
+                glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
     def _draw_bv(self, bx, by, bz, ox, label):
         glDisable(GL_LIGHTING); glColor3f(0.54,0.08,0.08); glLineWidth(1.2)
