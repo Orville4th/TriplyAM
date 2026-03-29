@@ -31,18 +31,10 @@ else
         pyvista pymeshfix
 fi
 
-# ── Resolve the python3 symlink to a real binary ─────────────────────────────
-# venv/bin/python3 is a symlink to the system Python. On another machine that
-# path won't exist. Replace every symlink with a copy of the real binary.
+# ── Resolve the python3 symlink to a real binary ──────────────────────────────
 for PYLINK in AppDir_simple/usr/venv/bin/python3 AppDir_simple/usr/venv/bin/python3.*; do
     [ -e "$PYLINK" ] || continue
-    REAL=$(readlink -f "$PYLINK" 2>/dev/null || true)
-    if [ -n "$REAL" ] && [ -f "$REAL" ] && [ "$REAL" != "$(readlink -f "$PYLINK")" ]; then
-        echo "Resolving $(basename $PYLINK): $REAL"
-        rm "$PYLINK"
-        cp "$REAL" "$PYLINK"
-        chmod +x "$PYLINK"
-    elif [ -L "$PYLINK" ]; then
+    if [ -L "$PYLINK" ]; then
         REAL=$(readlink -f "$PYLINK")
         if [ -f "$REAL" ]; then
             echo "Resolving symlink $(basename $PYLINK): $REAL"
@@ -53,43 +45,52 @@ for PYLINK in AppDir_simple/usr/venv/bin/python3 AppDir_simple/usr/venv/bin/pyth
     fi
 done
 
-# ── Bundle Python stdlib ──────────────────────────────────────────────────────
-# The Python binary has sys.prefix baked in pointing to the build machine.
-# We override this with PYTHONHOME in AppRun, but Python still needs to find
-# its stdlib. Copy it into the AppImage under usr/pythonlib/.
+# ── Detect Python version ─────────────────────────────────────────────────────
 PYTHON_BIN="AppDir_simple/usr/venv/bin/python3"
 PYTHON_VERSION=$("$PYTHON_BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.11")
+echo "Detected Python version: $PYTHON_VERSION"
+
+# ── Bundle Python stdlib into the venv ───────────────────────────────────────
+# Instead of a separate pythonlib dir, we put the stdlib INSIDE the venv
+# at venv/lib/pythonX.Y/ so PYTHONHOME=venv works cleanly.
 STDLIB_SRC=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_path('stdlib'))" 2>/dev/null || true)
 
-if [ -z "$STDLIB_SRC" ]; then
-    # Fallback: try common locations
+# Fallback search
+if [ -z "$STDLIB_SRC" ] || [ ! -d "$STDLIB_SRC" ]; then
     for D in \
-        "/opt/hostedtoolcache/Python/${PYTHON_VERSION}."*/x64/lib/python${PYTHON_VERSION} \
-        "/usr/lib/python${PYTHON_VERSION}" \
-        "/usr/local/lib/python${PYTHON_VERSION}"; do
+        /opt/hostedtoolcache/Python/${PYTHON_VERSION}*/x64/lib/python${PYTHON_VERSION} \
+        /usr/lib/python${PYTHON_VERSION} \
+        /usr/local/lib/python${PYTHON_VERSION}; do
         if [ -d "$D" ]; then STDLIB_SRC="$D"; break; fi
     done
 fi
 
+VENV_STDLIB="AppDir_simple/usr/venv/lib/python${PYTHON_VERSION}"
+
 if [ -n "$STDLIB_SRC" ] && [ -d "$STDLIB_SRC" ]; then
     echo "Bundling Python stdlib from: $STDLIB_SRC"
-    mkdir -p "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}"
-    cp -r "$STDLIB_SRC/." "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}/"
-    # Also copy lib-dynload if it exists alongside stdlib
-    DYNLOAD_SRC="$(dirname "$STDLIB_SRC")/python${PYTHON_VERSION}/lib-dynload"
-    if [ ! -d "$DYNLOAD_SRC" ]; then
-        DYNLOAD_SRC="${STDLIB_SRC}/lib-dynload"
-    fi
-    if [ -d "$DYNLOAD_SRC" ]; then
-        echo "Bundling lib-dynload from: $DYNLOAD_SRC"
-        mkdir -p "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}/lib-dynload"
-        cp -r "$DYNLOAD_SRC/." "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}/lib-dynload/"
-    fi
+    mkdir -p "$VENV_STDLIB"
+    # Copy stdlib files — skip site-packages (venv already has them)
+    rsync -a --exclude='site-packages' --exclude='__pycache__' \
+        "$STDLIB_SRC/" "$VENV_STDLIB/" 2>/dev/null || \
+    cp -rn "$STDLIB_SRC/." "$VENV_STDLIB/"
+
+    # Bundle lib-dynload (compiled C extensions like datetime.so, _ssl.so etc.)
+    for DYNLOAD in \
+        "$(dirname "$STDLIB_SRC")/lib-dynload" \
+        "${STDLIB_SRC}/lib-dynload"; do
+        if [ -d "$DYNLOAD" ]; then
+            echo "Bundling lib-dynload from: $DYNLOAD"
+            mkdir -p "$VENV_STDLIB/lib-dynload"
+            cp -rn "$DYNLOAD/." "$VENV_STDLIB/lib-dynload/"
+            break
+        fi
+    done
 else
-    echo "WARNING: Could not find Python stdlib to bundle. App may not work on other machines."
+    echo "WARNING: Could not find Python stdlib to bundle."
 fi
 
-# ── Bundle libpython and other Python shared libs ────────────────────────────
+# ── Bundle libpython and other shared libs ────────────────────────────────────
 echo "Bundling Python shared libraries..."
 for LIB in $(ldd "$PYTHON_BIN" 2>/dev/null | grep -oP '(?<=> )/[^ ]+' | grep -v 'ld-linux'); do
     LIBNAME=$(basename "$LIB")
@@ -135,28 +136,22 @@ DESKTOP
 cp AppDir_simple/triply.desktop AppDir_simple/usr/share/applications/triply.desktop
 
 # ── Write AppRun ──────────────────────────────────────────────────────────────
-cat > AppDir_simple/AppRun << 'APPRUN'
+# Detect version at build time and bake it in
+cat > AppDir_simple/AppRun << APPRUN
 #!/bin/bash
 
-HERE="$(dirname "$(readlink -f "${0}")")"
+HERE="\$(dirname "\$(readlink -f "\${0}")")"
+PYVER="${PYTHON_VERSION}"
 
-# Detect Python version from bundled stdlib
-PYVER=$(ls "${HERE}/usr/pythonlib/" 2>/dev/null | head -1)
-
-# PYTHONHOME tells Python where to find its stdlib and site-packages.
-# We point it at our bundled locations so it never looks at the host system.
-if [ -n "$PYVER" ]; then
-    export PYTHONHOME="${HERE}/usr/pythonlib"
-    export PYTHONPATH="${HERE}/usr/pythonlib/${PYVER}:${HERE}/usr/venv/lib/${PYVER}/site-packages:${HERE}/usr/src/src:${PYTHONPATH}"
-else
-    export PYTHONPATH="${HERE}/usr/src/src:${PYTHONPATH}"
-fi
-
-# Bundled libs first
-export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/venv/lib:${LD_LIBRARY_PATH}"
+# PYTHONHOME=venv tells Python: find stdlib at venv/lib/pythonX.Y/
+# and site-packages at venv/lib/pythonX.Y/site-packages/
+# This overrides any baked-in sys.prefix from the build machine.
+export PYTHONHOME="\${HERE}/usr/venv"
+export PYTHONPATH="\${HERE}/usr/src/src:\${PYTHONPATH}"
+export LD_LIBRARY_PATH="\${HERE}/usr/lib:\${HERE}/usr/venv/lib:\${LD_LIBRARY_PATH}"
 
 # Wayland/X11 detection
-if [ -n "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
+if [ -n "\$WAYLAND_DISPLAY" ] && [ -z "\$DISPLAY" ]; then
     export PYOPENGL_PLATFORM=egl
     export QT_QPA_PLATFORM=wayland
 else
@@ -164,24 +159,24 @@ else
     export QT_QPA_PLATFORM=xcb
 fi
 
-LOG="$HOME/.triply-crash.log"
-: > "$LOG"
+LOG="\$HOME/.triply-crash.log"
+: > "\$LOG"
 
-PYTHON="${HERE}/usr/venv/bin/python3"
+PYTHON="\${HERE}/usr/venv/bin/python3"
 
-if [ ! -f "$PYTHON" ]; then
-    echo "ERROR: Bundled Python not found at $PYTHON" | tee "$LOG"
+if [ ! -f "\$PYTHON" ]; then
+    echo "ERROR: Bundled Python not found at \$PYTHON" | tee "\$LOG"
     exit 1
 fi
 
-exec "$PYTHON" "${HERE}/usr/src/src/main.py" "$@" 2>>"$LOG" 1>>"$LOG" &
-TRIPLY_PID=$!
+exec "\$PYTHON" "\${HERE}/usr/src/src/main.py" "\$@" 2>>"\$LOG" 1>>"\$LOG" &
+TRIPLY_PID=\$!
 
 sleep 5
-if ! kill -0 $TRIPLY_PID 2>/dev/null; then
-    echo "Triply failed to start. Error log: $LOG"
+if ! kill -0 \$TRIPLY_PID 2>/dev/null; then
+    echo "Triply failed to start. Error log: \$LOG"
     echo "Last 20 lines:"
-    tail -20 "$LOG"
+    tail -20 "\$LOG"
 fi
 APPRUN
 
