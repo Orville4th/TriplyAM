@@ -1,0 +1,105 @@
+name: Build Triply
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install PyQt6 PyOpenGL PyOpenGL_accelerate numpy numpy-stl
+          pip install scikit-image scipy meshlib manifold3d cadquery
+          pip install pyvista pymeshfix pyinstaller
+
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller triply.spec --clean
+
+      - name: Install Inno Setup and create installer
+        run: |
+          choco install innosetup -y
+          iscc installer.iss
+
+      - name: Upload installer to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Triply ${{ github.ref_name }}
+          body: |
+            ## Triply AM Tools ${{ github.ref_name }}
+
+            ### Windows
+            Download and run `Triply-Setup.exe`
+
+            ### Linux
+            Download `Triply-x86_64.AppImage`, then run:
+            ```
+            chmod +x Triply-*.AppImage
+            ./Triply-*.AppImage
+            ```
+
+            > If the app doesn't open, run it from a terminal to see any errors.
+            > Crash logs are written to `~/.triply-crash.log`
+          files: Output/Triply-Setup.exe
+          prerelease: ${{ contains(github.ref_name, 'beta') }}
+
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libglib2.0-0 \
+            libxcb-xinerama0 \
+            libxcb-cursor0 \
+            libxkbcommon-x11-0 \
+            libegl1
+
+      - name: Install Python deps into venv
+        run: |
+          python3 -m venv venv
+          venv/bin/pip install --upgrade pip
+          venv/bin/pip install PyQt6 PyOpenGL PyOpenGL_accelerate numpy numpy-stl
+          venv/bin/pip install scikit-image scipy meshlib manifold3d cadquery
+          venv/bin/pip install pyvista pymeshfix
+
+      - name: Install appimagetool
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O /usr/local/bin/appimagetool
+          chmod +x /usr/local/bin/appimagetool
+
+      - name: Build AppImage
+        run: |
+          chmod +x build_appimage.sh
+          APPIMAGE_EXTRACT_AND_RUN=1 ./build_appimage.sh ${{ github.ref_name }}
+
+      - name: Upload AppImage to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Triply ${{ github.ref_name }}
+          files: "*.appimage"
+          prerelease: ${{ contains(github.ref_name, 'beta') }}
