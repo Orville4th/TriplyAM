@@ -5,7 +5,6 @@ set -e
 cd "$(dirname "$(readlink -f "$0")")"
 
 VERSION=${1:-"beta"}
-
 OUTPUT="Triply-${VERSION}-x86_64.appimage"
 
 echo "Building Triply ${VERSION} AppImage..."
@@ -19,58 +18,79 @@ mkdir -p AppDir_simple/usr/share/icons/hicolor/256x256/apps
 
 cp -r src/ AppDir_simple/usr/src/
 
-# Use existing venv if available, otherwise create one
+# ── Build or copy venv ────────────────────────────────────────────────────────
 if [ -d "venv" ]; then
     echo "Using existing venv..."
     cp -r venv/ AppDir_simple/usr/venv/
-
-    # CRITICAL FIX: venv/bin/python3 is a symlink to the host system Python.
-    # That path doesn't exist on other machines. Resolve it to the real binary
-    # and replace the symlink with a copy of the actual interpreter.
-    VENV_PY="AppDir_simple/usr/venv/bin/python3"
-    REAL_PY=$(readlink -f "$VENV_PY" 2>/dev/null || true)
-
-    if [ -n "$REAL_PY" ] && [ -f "$REAL_PY" ] && [ "$REAL_PY" != "$(pwd)/$VENV_PY" ]; then
-        echo "Resolving python3 symlink: $REAL_PY -> bundled copy"
-        rm "$VENV_PY"
-        cp "$REAL_PY" "$VENV_PY"
-        chmod +x "$VENV_PY"
-    fi
-
-    # Also fix python3.x versioned symlinks (e.g. python3.11)
-    for VERSIONED in AppDir_simple/usr/venv/bin/python3.*; do
-        [ -L "$VERSIONED" ] || continue
-        REAL=$(readlink -f "$VERSIONED" 2>/dev/null || true)
-        if [ -n "$REAL" ] && [ -f "$REAL" ]; then
-            echo "Resolving $(basename $VERSIONED) symlink"
-            rm "$VERSIONED"
-            cp "$REAL" "$VERSIONED"
-            chmod +x "$VERSIONED"
-        fi
-    done
-
 else
     echo "Creating venv and installing dependencies..."
     python3 -m venv AppDir_simple/usr/venv
-
-    # Resolve symlinks immediately after creation
-    VENV_PY="AppDir_simple/usr/venv/bin/python3"
-    REAL_PY=$(readlink -f "$VENV_PY")
-    rm "$VENV_PY"
-    cp "$REAL_PY" "$VENV_PY"
-    chmod +x "$VENV_PY"
-
     AppDir_simple/usr/venv/bin/pip install --quiet \
         PyQt6 PyOpenGL PyOpenGL_accelerate numpy numpy-stl \
         scikit-image scipy meshlib manifold3d cadquery \
         pyvista pymeshfix
 fi
 
-# CRITICAL FIX: Bundle libpython3.x.so so the AppImage works on machines
-# that don't have the same Python version installed.
-PYTHON_BIN="AppDir_simple/usr/venv/bin/python3"
-echo "Bundling Python shared libraries..."
+# ── Resolve the python3 symlink to a real binary ─────────────────────────────
+# venv/bin/python3 is a symlink to the system Python. On another machine that
+# path won't exist. Replace every symlink with a copy of the real binary.
+for PYLINK in AppDir_simple/usr/venv/bin/python3 AppDir_simple/usr/venv/bin/python3.*; do
+    [ -e "$PYLINK" ] || continue
+    REAL=$(readlink -f "$PYLINK" 2>/dev/null || true)
+    if [ -n "$REAL" ] && [ -f "$REAL" ] && [ "$REAL" != "$(readlink -f "$PYLINK")" ]; then
+        echo "Resolving $(basename $PYLINK): $REAL"
+        rm "$PYLINK"
+        cp "$REAL" "$PYLINK"
+        chmod +x "$PYLINK"
+    elif [ -L "$PYLINK" ]; then
+        REAL=$(readlink -f "$PYLINK")
+        if [ -f "$REAL" ]; then
+            echo "Resolving symlink $(basename $PYLINK): $REAL"
+            rm "$PYLINK"
+            cp "$REAL" "$PYLINK"
+            chmod +x "$PYLINK"
+        fi
+    fi
+done
 
+# ── Bundle Python stdlib ──────────────────────────────────────────────────────
+# The Python binary has sys.prefix baked in pointing to the build machine.
+# We override this with PYTHONHOME in AppRun, but Python still needs to find
+# its stdlib. Copy it into the AppImage under usr/pythonlib/.
+PYTHON_BIN="AppDir_simple/usr/venv/bin/python3"
+PYTHON_VERSION=$("$PYTHON_BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.11")
+STDLIB_SRC=$("$PYTHON_BIN" -c "import sysconfig; print(sysconfig.get_path('stdlib'))" 2>/dev/null || true)
+
+if [ -z "$STDLIB_SRC" ]; then
+    # Fallback: try common locations
+    for D in \
+        "/opt/hostedtoolcache/Python/${PYTHON_VERSION}."*/x64/lib/python${PYTHON_VERSION} \
+        "/usr/lib/python${PYTHON_VERSION}" \
+        "/usr/local/lib/python${PYTHON_VERSION}"; do
+        if [ -d "$D" ]; then STDLIB_SRC="$D"; break; fi
+    done
+fi
+
+if [ -n "$STDLIB_SRC" ] && [ -d "$STDLIB_SRC" ]; then
+    echo "Bundling Python stdlib from: $STDLIB_SRC"
+    mkdir -p "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}"
+    cp -r "$STDLIB_SRC/." "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}/"
+    # Also copy lib-dynload if it exists alongside stdlib
+    DYNLOAD_SRC="$(dirname "$STDLIB_SRC")/python${PYTHON_VERSION}/lib-dynload"
+    if [ ! -d "$DYNLOAD_SRC" ]; then
+        DYNLOAD_SRC="${STDLIB_SRC}/lib-dynload"
+    fi
+    if [ -d "$DYNLOAD_SRC" ]; then
+        echo "Bundling lib-dynload from: $DYNLOAD_SRC"
+        mkdir -p "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}/lib-dynload"
+        cp -r "$DYNLOAD_SRC/." "AppDir_simple/usr/pythonlib/python${PYTHON_VERSION}/lib-dynload/"
+    fi
+else
+    echo "WARNING: Could not find Python stdlib to bundle. App may not work on other machines."
+fi
+
+# ── Bundle libpython and other Python shared libs ────────────────────────────
+echo "Bundling Python shared libraries..."
 for LIB in $(ldd "$PYTHON_BIN" 2>/dev/null | grep -oP '(?<=> )/[^ ]+' | grep -v 'ld-linux'); do
     LIBNAME=$(basename "$LIB")
     if echo "$LIBNAME" | grep -qE '^(libpython|libssl|libcrypto|libffi|libbz2|liblzma|libsqlite|libreadline|libncurses|libtinfo|libz\.so)'; then
@@ -81,7 +101,7 @@ for LIB in $(ldd "$PYTHON_BIN" 2>/dev/null | grep -oP '(?<=> )/[^ ]+' | grep -v 
     fi
 done
 
-# Generate icon
+# ── Generate icon ─────────────────────────────────────────────────────────────
 python3 -c "
 import struct,zlib
 w,h=256,256
@@ -99,7 +119,6 @@ raw=b''.join(b'\x00'+r for r in img)
 data=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b''))
 open('/tmp/triply.png','wb').write(data)
 "
-
 cp /tmp/triply.png AppDir_simple/triply.png
 cp /tmp/triply.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triply.png
 
@@ -115,14 +134,26 @@ DESKTOP
 
 cp AppDir_simple/triply.desktop AppDir_simple/usr/share/applications/triply.desktop
 
+# ── Write AppRun ──────────────────────────────────────────────────────────────
 cat > AppDir_simple/AppRun << 'APPRUN'
 #!/bin/bash
 
 HERE="$(dirname "$(readlink -f "${0}")")"
 
-# Bundle our own libs first — libpython and friends
+# Detect Python version from bundled stdlib
+PYVER=$(ls "${HERE}/usr/pythonlib/" 2>/dev/null | head -1)
+
+# PYTHONHOME tells Python where to find its stdlib and site-packages.
+# We point it at our bundled locations so it never looks at the host system.
+if [ -n "$PYVER" ]; then
+    export PYTHONHOME="${HERE}/usr/pythonlib"
+    export PYTHONPATH="${HERE}/usr/pythonlib/${PYVER}:${HERE}/usr/venv/lib/${PYVER}/site-packages:${HERE}/usr/src/src:${PYTHONPATH}"
+else
+    export PYTHONPATH="${HERE}/usr/src/src:${PYTHONPATH}"
+fi
+
+# Bundled libs first
 export LD_LIBRARY_PATH="${HERE}/usr/lib:${HERE}/usr/venv/lib:${LD_LIBRARY_PATH}"
-export PYTHONPATH="${HERE}/usr/src/src:${PYTHONPATH}"
 
 # Wayland/X11 detection
 if [ -n "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
@@ -148,7 +179,6 @@ TRIPLY_PID=$!
 
 sleep 5
 if ! kill -0 $TRIPLY_PID 2>/dev/null; then
-    echo ""
     echo "Triply failed to start. Error log: $LOG"
     echo "Last 20 lines:"
     tail -20 "$LOG"
@@ -157,7 +187,7 @@ APPRUN
 
 chmod +x AppDir_simple/AppRun
 
-# Find appimagetool
+# ── Package with appimagetool ─────────────────────────────────────────────────
 if command -v appimagetool &>/dev/null; then
     APPIMAGETOOL="appimagetool"
 elif [ -f "$HOME/tools/appimagetool" ]; then
