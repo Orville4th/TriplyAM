@@ -5,9 +5,9 @@ set -e
 cd "$(dirname "$(readlink -f "$0")")"
 
 VERSION=${1:-"beta"}
-OUTPUT="Triply-${VERSION}-x86_64.appimage"
+OUTPUT="TriplyAM-${VERSION}-x86_64.appimage"
 
-echo "Building Triply ${VERSION} AppImage..."
+echo "Building TriplyAM ${VERSION} AppImage..."
 
 rm -rf AppDir_simple
 
@@ -118,17 +118,17 @@ for y in range(h):
 def chunk(t,d): c=zlib.crc32(t+d)&0xffffffff; return struct.pack('>I',len(d))+t+d+struct.pack('>I',c)
 raw=b''.join(b'\x00'+r for r in img)
 data=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b''))
-open('/tmp/triply.png','wb').write(data)
+open('/tmp/triplyam.png','wb').write(data)
 "
-cp /tmp/triply.png AppDir_simple/triply.png
-cp /tmp/triply.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triply.png
+cp /tmp/triplyam.png AppDir_simple/triplyam.png
+cp /tmp/triplyam.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triplyam.png
 
 cat > AppDir_simple/triply.desktop << 'DESKTOP'
 [Desktop Entry]
-Name=Triply
-Comment=AM Tools and Lattices — by Orville Wright IV
-Exec=Triply
-Icon=triply
+Name=TriplyAM
+Comment=TPMS & Lattice Tools for Additive Manufacturing
+Exec=TriplyAM
+Icon=triplyam
 Type=Application
 Categories=Graphics;
 DESKTOP
@@ -174,7 +174,7 @@ TRIPLY_PID=\$!
 
 sleep 5
 if ! kill -0 \$TRIPLY_PID 2>/dev/null; then
-    echo "Triply failed to start. Error log: \$LOG"
+    echo "TriplyAM failed to start. Error log: \$LOG"
     echo "Last 20 lines:"
     tail -20 "\$LOG"
 fi

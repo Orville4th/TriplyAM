@@ -1,5 +1,5 @@
 """
-Triply — AM Tools and Lattices
+TriplyAM — AM Tools and Lattices
 By Orville Wright IV. All rights reserved.
 """
 
@@ -216,7 +216,7 @@ class TripLyWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Triply — AM Tools and Lattices")
+        self.setWindowTitle("TriplyAM — AM Tools and Lattices")
 
         # Load settings first so scale is available
         import os, json as _json
@@ -379,7 +379,7 @@ class TripLyWindow(QMainWindow):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self._initial_fit)
         self.status.showMessage(
-            "Triply  |  Right-drag:orbit  Middle-drag:pan  Scroll:zoom  "
+            "TriplyAM  |  Right-drag:orbit  Middle-drag:pan  Scroll:zoom  "
             "Left-click:select  Click empty:deselect  Ctrl+A:select all  Drop files to import"
         )
 
@@ -420,7 +420,7 @@ class TripLyWindow(QMainWindow):
         sm.addSeparator()
         self._act(sm,"UI Scale…","",self._open_ui_scale_dialog)
         sm.addSeparator()
-        self._act(sm,"About Triply…","",self._dlg_about)
+        self._act(sm,"About TriplyAM…","",self._dlg_about)
 
     def _act(self, menu, text, shortcut, slot):
         a = QAction(text, self)
@@ -951,7 +951,7 @@ class TripLyWindow(QMainWindow):
         for i,(_,val) in enumerate(options):
             if abs(val-current)<0.01: combo.setCurrentIndex(i)
         lay.addWidget(combo)
-        note=QLabel("Restart Triply to apply the new scale.")
+        note=QLabel("Restart TriplyAM to apply the new scale.")
         note.setStyleSheet("color:#888;font-size:11px;"); note.setWordWrap(True)
         lay.addWidget(note)
         btns=QHBoxLayout()
@@ -1846,8 +1846,8 @@ class TripLyWindow(QMainWindow):
         )
 
     def _dlg_about(self):
-        QMessageBox.about(self,"About Triply",
-            "<b>Triply — AM Tools and Lattices</b><br>Version 0.2.0<br><br>"
+        QMessageBox.about(self,"About TriplyAM",
+            "<b>TriplyAM — AM Tools and Lattices</b><br>Version 0.2.0<br><br>"
             "Created by <b>Orville Wright IV</b><br>"
             "All rights reserved. © 2025 Orville Wright IV<br><br>"
             "Free additive manufacturing toolset for SLS, SLA, mSLA, and DMLS.<br><br>"
@@ -1870,8 +1870,8 @@ def main():
     fmt.setVersion(2, 1)
     QSurfaceFormat.setDefaultFormat(fmt)
 
-    app.setApplicationName("Triply")
-    app.setApplicationDisplayName("Triply — AM Tools and Lattices")
+    app.setApplicationName("TriplyAM")
+    app.setApplicationDisplayName("TriplyAM — AM Tools and Lattices")
     win=TripLyWindow(); win.show(); sys.exit(app.exec())
 
 if __name__=="__main__":
