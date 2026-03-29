@@ -33,6 +33,11 @@ class Viewport3D(QOpenGLWidget):
         fmt.setDepthBufferSize(24)
         fmt.setStencilBufferSize(8)
         fmt.setSamples(4)
+        # Compatibility profile required: viewport uses legacy fixed-function
+        # OpenGL (GL_LIGHTING, glLightfv, glShadeModel, glColorMaterial etc.)
+        # which are removed in Core profile 3.2+
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CompatibilityProfile)
+        fmt.setVersion(2, 1)
         self.setFormat(fmt)
         self.setMinimumSize(400, 300)
         from PyQt6.QtWidgets import QSizePolicy

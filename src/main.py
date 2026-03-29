@@ -1859,14 +1859,26 @@ def main():
     app=QApplication(sys.argv)
     # AA_UseHighDpiPixmaps removed in PyQt6 — HiDPI handled automatically
 
-    # Stencil buffer for section view
+    # Surface format: Compatibility profile required for legacy OpenGL
+    # (glEnable(GL_LIGHTING), glLightfv, glShadeModel etc. used in viewport.py)
     from PyQt6.QtGui import QSurfaceFormat
     fmt=QSurfaceFormat()
-    fmt.setDepthBufferSize(24); fmt.setStencilBufferSize(8)
+    fmt.setDepthBufferSize(24)
+    fmt.setStencilBufferSize(8)
+    fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CompatibilityProfile)
+    fmt.setVersion(2, 1)
     QSurfaceFormat.setDefaultFormat(fmt)
 
     app.setApplicationName("Triply")
     app.setApplicationDisplayName("Triply — AM Tools and Lattices")
     win=TripLyWindow(); win.show(); sys.exit(app.exec())
 
-if __name__=="__main__": main()
+if __name__=="__main__":
+    import traceback, os
+    try:
+        main()
+    except Exception as e:
+        log = os.path.expanduser("~/.triply-crash.log")
+        with open(log, "a") as f:
+            traceback.print_exc(file=f)
+        raise
