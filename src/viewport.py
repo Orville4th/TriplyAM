@@ -33,11 +33,6 @@ class Viewport3D(QOpenGLWidget):
         fmt.setDepthBufferSize(24)
         fmt.setStencilBufferSize(8)
         fmt.setSamples(4)
-        # Compatibility profile required: viewport uses legacy fixed-function
-        # OpenGL (GL_LIGHTING, glLightfv, glShadeModel, glColorMaterial etc.)
-        # which are removed in Core profile 3.2+
-        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CompatibilityProfile)
-        fmt.setVersion(2, 1)
         self.setFormat(fmt)
         self.setMinimumSize(400, 300)
         from PyQt6.QtWidgets import QSizePolicy
@@ -400,15 +395,12 @@ class Viewport3D(QOpenGLWidget):
                     glVertex3f(poly[i+1][0],poly[i+1][1],z_cap)
             glEnd()
 
-            # Also draw ALL triangles below clip (projected to cap z) — 
-            # this fills interior correctly for solid meshes
-            below = (z0<=clip_z) & (z1<=clip_z) & (z2<=clip_z)
-            glBegin(GL_TRIANGLES)
-            for fi in _np.where(below)[0]:
-                tri=faces[fi]
-                for vi in tri:
-                    glVertex3f(float(v[vi,0]),float(v[vi,1]),z_cap)
-            glEnd()
+            # NOTE: We do NOT draw all-below triangles into the stencil.
+            # That approach only works for convex solid meshes. For lattice/hollow
+            # meshes (gyroid etc.) the inner faces cancel the outer via GL_INVERT,
+            # producing a solid-looking fill instead of showing wall thickness.
+            # The crossing triangles alone correctly define the section boundary
+            # for both solid and hollow meshes.
 
             # ── PASS 2: Draw fill where stencil != 0 ─────────────────────────
             glColorMask(True,True,True,True)
@@ -657,6 +649,10 @@ class Viewport3D(QOpenGLWidget):
             prj = np.array(glGetDoublev(GL_PROJECTION_MATRIX), dtype=np.float64)
             viewport = np.array(glGetIntegerv(GL_VIEWPORT), dtype=np.float64)
 
+            # Scale logical pixel coords to physical pixels for HiDPI displays
+            dpr = self.devicePixelRatio()
+            x = x * dpr
+            y = y * dpr
             yi = float(self._height - y)
 
             def unproj(wz):

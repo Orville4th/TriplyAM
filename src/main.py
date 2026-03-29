@@ -1680,9 +1680,9 @@ class TripLyWindow(QMainWindow):
     def _save_path(self, default_name):
         base=os.path.splitext(default_name)[0]
         path,_ = QFileDialog.getSaveFileName(
-            self,"Export", os.path.join(self._last_export_dir, base,
-            options=QFileDialog.Option.DontUseNativeDialog),
-            "STL (*.stl);;3MF (*.3mf);;STEP (*.step)"
+            self, "Export", os.path.join(self._last_export_dir, base),
+            "STL (*.stl);;3MF (*.3mf);;STEP (*.step)",
+            options=QFileDialog.Option.DontUseNativeDialog
         )
         if not path: return None
         # Auto-add extension
@@ -1859,8 +1859,7 @@ def main():
     app=QApplication(sys.argv)
     # AA_UseHighDpiPixmaps removed in PyQt6 — HiDPI handled automatically
 
-    # Surface format: Compatibility profile required for legacy OpenGL
-    # (glEnable(GL_LIGHTING), glLightfv, glShadeModel etc. used in viewport.py)
+    # Stencil buffer for section view
     from PyQt6.QtGui import QSurfaceFormat
     fmt=QSurfaceFormat()
     fmt.setDepthBufferSize(24)
