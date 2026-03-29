@@ -33,6 +33,8 @@ class Viewport3D(QOpenGLWidget):
         fmt.setDepthBufferSize(24)
         fmt.setStencilBufferSize(8)
         fmt.setSamples(4)
+        fmt.setProfile(QSurfaceFormat.OpenGLContextProfile.CompatibilityProfile)
+        fmt.setVersion(2, 1)
         self.setFormat(fmt)
         self.setMinimumSize(400, 300)
         from PyQt6.QtWidgets import QSizePolicy
@@ -322,15 +324,28 @@ class Viewport3D(QOpenGLWidget):
 
     def _draw_section_caps(self):
         """
-        Correct stencil-buffer section fill.
-        Uses two-pass stencil: render mesh caps into stencil, 
-        then draw filled quad only where stencil is set.
+        Topology-correct section cap using even-odd stencil rule.
+
+        Works for solid meshes AND hollow/lattice meshes (gyroid etc.):
+        - Even-odd: every surface crossing toggles solid/void in the stencil.
+        - A solid cube fills solid. A gyroid shows its pockets open.
+        - Outer shell fills solid, inner TPMS pockets show the voids.
+
+        Pipeline per mesh:
+          1. Clip every triangle against the Z plane → get crossing polygons
+             and intersection edge segments.
+          2. Stencil pass (even-odd, GL_INVERT): draw ALL clipped triangles
+             (both crossing polys and fully-below triangles projected to cap Z).
+             This correctly toggles solid↔void for every surface layer.
+          3. Color fill pass: draw a full quad, masked by stencil != 0.
+          4. Hatch pass: diagonal lines over the filled region.
+          5. Edge pass: sharp black outline along the cut contour.
         """
         import numpy as _np
         if not self._bv_list: return
         bz = float(self._bv_list[0][2])
         clip_z = bz * self._layer_pct
-        z_cap = clip_z + 0.005
+        z_cap  = clip_z + 0.005
 
         pastels = [
             (0.72,0.85,0.95),(0.95,0.75,0.72),(0.75,0.95,0.75),
@@ -342,105 +357,145 @@ class Viewport3D(QOpenGLWidget):
 
         for mesh_i,(idx_m,mesh) in enumerate(self._meshes.items()):
             if not mesh['visible']: continue
-            v = mesh['verts'] + mesh['offset']
+            v     = mesh['verts'] + mesh['offset']
             faces = mesh['faces']
             r,g,b = pastels[mesh_i % len(pastels)]
 
-            # Bounding box for full cap quad
-            xmin,xmax = float(v[:,0].min())-1, float(v[:,0].max())+1
-            ymin,ymax = float(v[:,1].min())-1, float(v[:,1].max())+1
+            z0 = v[faces[:,0],2]
+            z1 = v[faces[:,1],2]
+            z2 = v[faces[:,2],2]
 
-            # Get clipped cap triangles
-            z0=v[faces[:,0],2]; z1=v[faces[:,1],2]; z2=v[faces[:,2],2]
-            crossing = ((z0>clip_z)|(z1>clip_z)|(z2>clip_z)) &                        ((z0<=clip_z)|(z1<=clip_z)|(z2<=clip_z))
-            cross_idx = _np.where(crossing)[0]
+            # ── Clip triangles against the cap plane ──────────────────────────
+            # crossing: triangles that straddle the clip plane
+            crossing_mask = (
+                ((z0>clip_z)|(z1>clip_z)|(z2>clip_z)) &
+                ((z0<=clip_z)|(z1<=clip_z)|(z2<=clip_z))
+            )
+            # below: triangles entirely below the clip plane
+            below_mask = (z0<=clip_z) & (z1<=clip_z) & (z2<=clip_z)
 
-            cap_polys = []
-            cut_segs = []
+            cross_idx = _np.where(crossing_mask)[0]
+            below_idx = _np.where(below_mask)[0]
+
+            # Build clipped polygons and cut edge segments from crossing tris
+            cap_polys  = []   # clipped polygon for each crossing triangle
+            cut_segs   = []   # pairs of XY points on the cut contour
+            xmin = xmax = ymin = ymax = None
+
             for fi in cross_idx:
-                tri = faces[fi]
-                pts = [(float(v[tri[i],0]),float(v[tri[i],1]),
-                        float(v[tri[i],2])) for i in range(3)]
-                clipped=[]; intersect_pts=[]
+                tri  = faces[fi]
+                pts  = [(float(v[tri[i],0]), float(v[tri[i],1]),
+                         float(v[tri[i],2])) for i in range(3)]
+                clipped = []; intersect_pts = []
                 for i in range(3):
-                    cur=pts[i]; nxt=pts[(i+1)%3]
-                    if cur[2]<=clip_z: clipped.append((cur[0],cur[1]))
-                    if (cur[2]<=clip_z)!=(nxt[2]<=clip_z):
-                        t=(clip_z-cur[2])/(nxt[2]-cur[2]+1e-10)
-                        ix=cur[0]+t*(nxt[0]-cur[0])
-                        iy=cur[1]+t*(nxt[1]-cur[1])
-                        clipped.append((ix,iy))
-                        intersect_pts.append((ix,iy))
-                if len(clipped)>=3: cap_polys.append(clipped)
-                if len(intersect_pts)==2: cut_segs.extend(intersect_pts)
+                    cur = pts[i]; nxt = pts[(i+1)%3]
+                    if cur[2] <= clip_z:
+                        clipped.append((cur[0], cur[1]))
+                    if (cur[2] <= clip_z) != (nxt[2] <= clip_z):
+                        t  = (clip_z - cur[2]) / (nxt[2] - cur[2] + 1e-10)
+                        ix = cur[0] + t*(nxt[0]-cur[0])
+                        iy = cur[1] + t*(nxt[1]-cur[1])
+                        clipped.append((ix, iy))
+                        intersect_pts.append((ix, iy))
+                if len(clipped) >= 3:
+                    cap_polys.append(clipped)
+                    for px,py in clipped:
+                        xmin = px if xmin is None else min(xmin,px)
+                        xmax = px if xmax is None else max(xmax,px)
+                        ymin = py if ymin is None else min(ymin,py)
+                        ymax = py if ymax is None else max(ymax,py)
+                if len(intersect_pts) == 2:
+                    cut_segs.extend(intersect_pts)
 
-            if not cap_polys: continue
+            # Also accumulate bounds from below triangles
+            if len(below_idx):
+                bv = v[faces[below_idx].ravel()]
+                xmin = float(bv[:,0].min())-1 if xmin is None else min(xmin, float(bv[:,0].min())-1)
+                xmax = float(bv[:,0].max())+1 if xmax is None else max(xmax, float(bv[:,0].max())+1)
+                ymin = float(bv[:,1].min())-1 if ymin is None else min(ymin, float(bv[:,1].min())-1)
+                ymax = float(bv[:,1].max())+1 if ymax is None else max(ymax, float(bv[:,1].max())+1)
 
-            # ── PASS 1: Write cap triangles to stencil ────────────────────────
+            if not cap_polys and len(below_idx) == 0: continue
+            if xmin is None: continue
+
+            xmin -= 1; xmax += 1; ymin -= 1; ymax += 1
+
+            # ── PASS 1: Even-odd stencil fill ────────────────────────────────
+            # GL_INVERT toggles the stencil bit on every surface crossing.
+            # This is the even-odd winding rule:
+            #   solid regions (odd crossings from outside) → stencil ON
+            #   void pockets (even crossings) → stencil OFF
+            # Works correctly for both solid meshes and hollow lattice meshes.
             glEnable(GL_STENCIL_TEST)
             glClear(GL_STENCIL_BUFFER_BIT)
-            glColorMask(False,False,False,False)
+            glColorMask(False, False, False, False)
             glDepthMask(False)
             glDisable(GL_DEPTH_TEST)
             glDisable(GL_CULL_FACE)
             glStencilFunc(GL_ALWAYS, 0, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT)
 
-            # Draw cap polygons into stencil — front faces toggle stencil bit
             glBegin(GL_TRIANGLES)
+
+            # Draw crossing polygons (clipped to the cap plane)
             for poly in cap_polys:
-                for i in range(1,len(poly)-1):
-                    glVertex3f(poly[0][0],poly[0][1],z_cap)
-                    glVertex3f(poly[i][0],poly[i][1],z_cap)
-                    glVertex3f(poly[i+1][0],poly[i+1][1],z_cap)
+                for i in range(1, len(poly)-1):
+                    glVertex3f(poly[0][0], poly[0][1], z_cap)
+                    glVertex3f(poly[i][0], poly[i][1], z_cap)
+                    glVertex3f(poly[i+1][0], poly[i+1][1], z_cap)
+
+            # Draw fully-below triangles projected onto the cap plane.
+            # Each surface layer toggles the stencil — so a solid cube fills
+            # solid (one outer surface), and a gyroid toggles solid→void→solid
+            # at each shell, leaving pockets open exactly as Blender does.
+            for fi in below_idx:
+                tri = faces[fi]
+                glVertex3f(float(v[tri[0],0]), float(v[tri[0],1]), z_cap)
+                glVertex3f(float(v[tri[1],0]), float(v[tri[1],1]), z_cap)
+                glVertex3f(float(v[tri[2],0]), float(v[tri[2],1]), z_cap)
+
             glEnd()
 
-            # NOTE: We do NOT draw all-below triangles into the stencil.
-            # That approach only works for convex solid meshes. For lattice/hollow
-            # meshes (gyroid etc.) the inner faces cancel the outer via GL_INVERT,
-            # producing a solid-looking fill instead of showing wall thickness.
-            # The crossing triangles alone correctly define the section boundary
-            # for both solid and hollow meshes.
-
-            # ── PASS 2: Draw fill where stencil != 0 ─────────────────────────
-            glColorMask(True,True,True,True)
+            # ── PASS 2: Color fill masked by stencil ─────────────────────────
+            glColorMask(True, True, True, True)
             glDepthMask(True)
             glStencilFunc(GL_NOTEQUAL, 0, 0xFF)
             glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP)
-            glColor3f(r,g,b)
+            glColor3f(r, g, b)
             glBegin(GL_QUADS)
-            glVertex3f(xmin,ymin,z_cap+0.001)
-            glVertex3f(xmax,ymin,z_cap+0.001)
-            glVertex3f(xmax,ymax,z_cap+0.001)
-            glVertex3f(xmin,ymax,z_cap+0.001)
+            glVertex3f(xmin, ymin, z_cap+0.001)
+            glVertex3f(xmax, ymin, z_cap+0.001)
+            glVertex3f(xmax, ymax, z_cap+0.001)
+            glVertex3f(xmin, ymax, z_cap+0.001)
             glEnd()
 
-            # ── PASS 3: Hatch over fill ───────────────────────────────────────
+            # ── PASS 3: Hatch over filled region ──────────────────────────────
             glStencilFunc(GL_NOTEQUAL, 0, 0xFF)
-            hr,hg,hb=r*0.6,g*0.6,b*0.6
-            glColor3f(hr,hg,hb)
+            hr,hg,hb = r*0.6, g*0.6, b*0.6
+            glColor3f(hr, hg, hb)
             glLineWidth(0.75)
-            hz=z_cap+0.003
-            spacing=2.0
+            hz = z_cap + 0.003
+            spacing = 2.0
             glBegin(GL_LINES)
-            span_=max(xmax-xmin,ymax-ymin)*2
-            d=xmin-span_
-            while d<xmax+span_:
-                glVertex3f(d,ymin,hz); glVertex3f(d+(ymax-ymin),ymax,hz)
-                d+=spacing
+            span_ = max(xmax-xmin, ymax-ymin) * 2
+            d = xmin - span_
+            while d < xmax + span_:
+                glVertex3f(d, ymin, hz)
+                glVertex3f(d + (ymax-ymin), ymax, hz)
+                d += spacing
             glEnd()
             glLineWidth(1.0)
             glDisable(GL_STENCIL_TEST)
 
             # ── PASS 4: Cut edge outline ──────────────────────────────────────
             glEnable(GL_DEPTH_TEST)
-            glColor3f(0.05,0.05,0.05)
-            glLineWidth(2.0)
+            glColor3f(0.05, 0.05, 0.05)
+            glLineWidth(1.5)
             glBegin(GL_LINES)
-            for i in range(0,len(cut_segs)-1,2):
-                x1,y1=cut_segs[i]; x2,y2=cut_segs[i+1]
-                glVertex3f(x1,y1,z_cap+0.01)
-                glVertex3f(x2,y2,z_cap+0.01)
+            for i in range(0, len(cut_segs)-1, 2):
+                x1,y1 = cut_segs[i]; x2,y2 = cut_segs[i+1]
+                glVertex3f(x1, y1, z_cap+0.01)
+                glVertex3f(x2, y2, z_cap+0.01)
             glEnd()
             glLineWidth(1.0)
 

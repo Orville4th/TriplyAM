@@ -26,7 +26,7 @@ if SRC not in sys.path:
 from viewport import Viewport3D
 from ui.theme import APP_STYLESHEET, ACCENT, NEUTRAL, ACCENT_RGB, NEUTRAL_RGB
 
-CONFIG_PATH = os.path.join(SRC, '..', 'config.json')
+CONFIG_PATH = os.path.join(os.path.expanduser('~'), '.config', 'triply', 'config.json')
 MESH_COLOR  = (0.62, 0.62, 0.62)
 
 PRINTERS = {
@@ -67,6 +67,7 @@ def load_config():
 
 def save_config(cfg):
     try:
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH,'w') as f: json.dump(cfg,f,indent=2)
     except: pass
 
@@ -1740,8 +1741,9 @@ class TripLyWindow(QMainWindow):
         if not p: return
         base=os.path.splitext(p['name'])[0]
         path,_=QFileDialog.getSaveFileName(
-            self,"Export STL",os.path.join(self._last_export_dir,base+".stl",
-            options=QFileDialog.Option.DontUseNativeDialog),"STL (*.stl)"
+            self,"Export STL",os.path.join(self._last_export_dir,base+".stl"),
+            "STL (*.stl)",
+            options=QFileDialog.Option.DontUseNativeDialog
         )
         if not path: return
         if not path.lower().endswith('.stl'): path+='.stl'
@@ -1873,11 +1875,11 @@ def main():
     win=TripLyWindow(); win.show(); sys.exit(app.exec())
 
 if __name__=="__main__":
-    import traceback, os
+    import traceback, os as _os
     try:
         main()
     except Exception as e:
-        log = os.path.expanduser("~/.triply-crash.log")
-        with open(log, "a") as f:
-            traceback.print_exc(file=f)
+        _log = _os.path.expanduser("~/.triply-crash.log")
+        with open(_log, "a") as _f:
+            traceback.print_exc(file=_f)
         raise
