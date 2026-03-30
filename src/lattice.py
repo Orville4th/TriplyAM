@@ -89,8 +89,12 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     from mesh_repair import weld_vertices, remove_degenerate
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
-    grad = (2*np.pi/cell_size)*np.sqrt(3.0)
-    threshold = min(lattice_thickness*grad*0.5, 0.9)
+    # Threshold controls strut width independently of cell size.
+    # lattice_thickness is in mm; normalize to cell_size to get a
+    # dimensionless fraction, then scale to the TPMS field range.
+    # This ensures changing cell_size does NOT change strut thickness.
+    t_frac = float(lattice_thickness) / float(cell_size)
+    threshold = min(t_frac * np.pi * np.sqrt(3.0), 0.9)
 
     pad = cell_size
     origin = mins - pad

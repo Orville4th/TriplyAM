@@ -920,15 +920,25 @@ class TripLyWindow(QMainWindow):
         return pid
 
     def _remove_sel(self):
-        item = self.tree.currentItem()
-        if not item: return
-        pid = item.data(0, Qt.ItemDataRole.UserRole)
-        if pid=='__lattice__' or pid not in self._parts: return
+        # Collect all selected items that are real parts
+        selected = self.tree.selectedItems()
+        if not selected:
+            # Fall back to currentItem if nothing explicitly selected
+            cur = self.tree.currentItem()
+            if cur: selected = [cur]
+        pids_to_remove = []
+        for item in selected:
+            pid = item.data(0, Qt.ItemDataRole.UserRole)
+            if pid and pid != '__lattice__' and pid in self._parts:
+                pids_to_remove.append((pid, item))
+        if not pids_to_remove: return
         self._push_undo()
-        part = self._parts[pid]
-        self.viewport.remove_mesh(part['mesh_idx'])
-        del self._parts[pid]
-        (item.parent() or self.tree.invisibleRootItem()).removeChild(item)
+        for pid, item in pids_to_remove:
+            if pid not in self._parts: continue  # already removed (e.g. duplicate in list)
+            part = self._parts[pid]
+            self.viewport.remove_mesh(part['mesh_idx'])
+            del self._parts[pid]
+            (item.parent() or self.tree.invisibleRootItem()).removeChild(item)
         self._refresh_pack_list(); self._update_density()
 
     def _save_settings(self):
