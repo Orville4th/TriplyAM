@@ -102,26 +102,16 @@ for LIB in $(ldd "$PYTHON_BIN" 2>/dev/null | grep -oP '(?<=> )/[^ ]+' | grep -v 
     fi
 done
 
-# ── Generate icon ─────────────────────────────────────────────────────────────
-python3 -c "
-import struct,zlib
-w,h=256,256
-img=[]
-for y in range(h):
-    row=[]
-    for x in range(w):
-        r,g,b,a=18,18,20,255
-        if 80<y<120 and 40<x<216: r,g,b=139,0,0
-        if 110<y<220 and 108<x<148: r,g,b=139,0,0
-        row.extend([r,g,b,a])
-    img.append(bytes(row))
-def chunk(t,d): c=zlib.crc32(t+d)&0xffffffff; return struct.pack('>I',len(d))+t+d+struct.pack('>I',c)
-raw=b''.join(b'\x00'+r for r in img)
-data=(b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(raw))+chunk(b'IEND',b''))
-open('/tmp/triplyam.png','wb').write(data)
-"
-cp /tmp/triplyam.png AppDir_simple/triplyam.png
-cp /tmp/triplyam.png AppDir_simple/usr/share/icons/hicolor/256x256/apps/triplyam.png
+# ── Copy TriplyAM icon ────────────────────────────────────────────────────────
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+if [ -f "$SCRIPT_DIR/triplyam_icon.png" ]; then
+    echo "Using triplyam_icon.png from project root"
+    cp "$SCRIPT_DIR/triplyam_icon.png" AppDir_simple/triplyam.png
+    cp "$SCRIPT_DIR/triplyam_icon.png" AppDir_simple/usr/share/icons/hicolor/256x256/apps/triplyam.png
+else
+    echo "ERROR: triplyam_icon.png not found in $SCRIPT_DIR — cannot build without icon"
+    exit 1
+fi
 
 cat > AppDir_simple/triply.desktop << 'DESKTOP'
 [Desktop Entry]
@@ -161,6 +151,8 @@ fi
 
 LOG="\$HOME/.triply-crash.log"
 : > "\$LOG"
+
+export APPDIR="\${HERE}"
 
 PYTHON="\${HERE}/usr/venv/bin/python3"
 

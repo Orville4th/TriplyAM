@@ -1870,21 +1870,43 @@ class TripLyWindow(QMainWindow):
         )
 
     def _dlg_about(self):
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTabWidget, QTextBrowser, QDialogButtonBox, QLabel
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTextBrowser, QDialogButtonBox, QLabel
+        from PyQt6.QtGui import QIcon, QPixmap
+        from PyQt6.QtCore import Qt
+        import os as _os
         dlg = QDialog(self)
         dlg.setWindowTitle("About TriplyAM")
         dlg.setMinimumWidth(520)
         dlg.setMinimumHeight(480)
         lay = QVBoxLayout(dlg)
 
-        # Header
+        # Header with icon
+        hdr_row = QHBoxLayout()
+        _icon_paths = [
+            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'triplyam_icon.png'),
+            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'triplyam_icon.png'),
+        ]
+        _here = _os.environ.get('APPDIR', '')
+        if _here:
+            _icon_paths.insert(0, _os.path.join(_here, 'triplyam.png'))
+            _icon_paths.insert(0, _os.path.join(_here, 'usr', 'share', 'icons', 'hicolor', '256x256', 'apps', 'triplyam.png'))
+        icon_lbl = QLabel()
+        for _p in _icon_paths:
+            if _os.path.exists(_p):
+                pix = QPixmap(_p).scaled(72, 72, Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+                icon_lbl.setPixmap(pix)
+                break
+        icon_lbl.setFixedSize(80, 80)
+        hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
             "<br><span style='color:#888;'>Version 0.2.0 (Beta)</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
-        lay.addWidget(hdr)
+        hdr_row.addWidget(hdr, 1)
+        lay.addLayout(hdr_row)
 
         tabs = QTabWidget()
 
@@ -2008,6 +2030,25 @@ def main():
 
     app.setApplicationName("TriplyAM")
     app.setApplicationDisplayName("TriplyAM — AM Tools and Lattices")
+
+    # Set app icon — look next to the script (dev) or inside AppImage (packaged)
+    from PyQt6.QtGui import QIcon
+    import os as _os
+    _icon_paths = [
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'triplyam_icon.png'),
+        _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'triplyam_icon.png'),
+        '/tmp/.mount_TriplyAM/usr/share/icons/hicolor/256x256/apps/triplyam.png',
+    ]
+    # Also check HERE-relative path when running from AppImage
+    _here = _os.environ.get('APPDIR', '')
+    if _here:
+        _icon_paths.insert(0, _os.path.join(_here, 'usr', 'share', 'icons', 'hicolor', '256x256', 'apps', 'triplyam.png'))
+        _icon_paths.insert(0, _os.path.join(_here, 'triplyam.png'))
+    for _p in _icon_paths:
+        if _os.path.exists(_p):
+            app.setWindowIcon(QIcon(_p))
+            break
+
     win=TripLyWindow(); win.show(); sys.exit(app.exec())
 
 if __name__=="__main__":
