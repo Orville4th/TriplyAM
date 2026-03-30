@@ -1856,12 +1856,124 @@ class TripLyWindow(QMainWindow):
         )
 
     def _dlg_about(self):
-        QMessageBox.about(self,"About TriplyAM",
-            "<b>TriplyAM — AM Tools and Lattices</b><br>Version 0.2.0<br><br>"
-            "Created by <b>Orville Wright IV</b><br>"
-            "All rights reserved. © 2025 Orville Wright IV<br><br>"
-            "Free additive manufacturing toolset for SLS, SLA, mSLA, and DMLS.<br><br>"
-            "<i>Free for makers worldwide.</i>")
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTabWidget, QTextBrowser, QDialogButtonBox, QLabel
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About TriplyAM")
+        dlg.setMinimumWidth(520)
+        dlg.setMinimumHeight(480)
+        lay = QVBoxLayout(dlg)
+
+        # Header
+        hdr = QLabel(
+            "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
+            "<br><span style='color:#888;'>Version 0.2.0 (Beta)</span>"
+            "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
+        )
+        hdr.setWordWrap(True)
+        lay.addWidget(hdr)
+
+        tabs = QTabWidget()
+
+        # ── About tab ──────────────────────────────────────────────
+        about_tb = QTextBrowser()
+        about_tb.setOpenExternalLinks(True)
+        about_tb.setHtml("""
+        <p>Free additive manufacturing toolset supporting SLS, SLA, mSLA, and DMLS workflows.</p>
+        <p>TriplyAM lets you import, visualize, lattice-infill, pack, and export 3D parts for
+        professional AM production — without the enterprise price tag.</p>
+        <p><b>Features:</b></p>
+        <ul>
+          <li>TPMS lattice generation (Gyroid, Schwarz P/D, Schoen I-WP)</li>
+          <li>Uniform shell offset via MeshLib</li>
+          <li>Boolean operations via manifold3d</li>
+          <li>Multi-part auto-packing for build volumes</li>
+          <li>STL, 3MF, STEP import/export</li>
+          <li>Section view with topology-correct caps</li>
+          <li>40+ supported printer build volumes</li>
+        </ul>
+        <p><i>Free for makers worldwide.</i></p>
+        <p><a href='https://github.com/Orville4th/TriplyAM'>github.com/Orville4th/TriplyAM</a></p>
+        """)
+        tabs.addTab(about_tb, "About")
+
+        # ── Changelog tab ──────────────────────────────────────────
+        cl_tb = QTextBrowser()
+        cl_tb.setHtml("""
+        <style>
+          h3 { color: #C0392B; margin-bottom: 2px; margin-top: 12px; }
+          ul { margin-top: 2px; }
+          .tag { color: #888; font-size: 11px; font-weight: normal; }
+        </style>
+
+        <h3>v0.2.0 — Beta 17 <span class='tag'>current</span></h3>
+        <ul>
+          <li>Fixed multi-select delete — Ctrl+A then Delete now removes all parts</li>
+          <li>Fixed lattice wall thickness control — strut width now independent of cell size</li>
+          <li>Cell size now correctly controls cell period only, not strut thickness</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 16</h3>
+        <ul>
+          <li>App renamed from Triply to <b>TriplyAM</b></li>
+          <li>New TriplyAM icon — lattice-T logo on grey-blue background</li>
+          <li>VBO (Vertex Buffer Object) GPU rendering — major performance improvement for dense meshes</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 15</h3>
+        <ul>
+          <li>Topology-correct section caps — gyroid pockets now show as open voids (like Blender)</li>
+          <li>Last import/export directory now remembered between sessions</li>
+          <li>Config saved to ~/.config/triplyam/ (writable outside AppImage)</li>
+          <li>Fixed export dialog crash (misplaced parenthesis in QFileDialog call)</li>
+          <li>Fixed second export dialog with same crash</li>
+          <li>Removed chmod requirement from release notes — AppImage is double-click ready</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 14</h3>
+        <ul>
+          <li>AppImage now fully self-contained — bundles Python 3.11, stdlib, and all dependencies</li>
+          <li>Fixed PYTHONHOME — Python no longer looks for stdlib on the host machine</li>
+          <li>Fixed libpython3.11.so bundling — works on machines without Python installed</li>
+          <li>AppImage downloads as executable — no chmod required</li>
+          <li>Added crash log at ~/.triply-crash.log for diagnostics</li>
+          <li>Wayland/X11 auto-detection in AppRun</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 13</h3>
+        <ul>
+          <li>Fixed OpenGL Compatibility Profile — legacy lighting calls now work on modern Mesa drivers</li>
+          <li>Fixed HiDPI mesh selection — click coordinates now scale by devicePixelRatio</li>
+          <li>GitHub Actions workflow fixed — venv pip install no longer uses broken activate</li>
+          <li>Added missing system libs (libxcb-cursor0, libxkbcommon-x11-0, libegl1) to CI</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 12 and earlier</h3>
+        <ul>
+          <li>Initial AppImage packaging via GitHub Actions</li>
+          <li>Windows installer via PyInstaller + Inno Setup</li>
+          <li>Fixed broken Python symlink in AppImage (venv/bin/python3 → real binary)</li>
+          <li>Fixed venv activation in CI — use venv/bin/pip directly</li>
+          <li>Fixed AppImage output filename case (.AppImage → .appimage)</li>
+        </ul>
+
+        <h3>v0.1.0 — Initial release</h3>
+        <ul>
+          <li>TPMS lattice generation pipeline (MeshLib + manifold3d + scikit-image)</li>
+          <li>3D viewport with orbit, pan, zoom, wireframe, section slider</li>
+          <li>Gizmo-based part translation</li>
+          <li>Multi-part packing with 40+ printer build volumes</li>
+          <li>STL / 3MF / STEP import and export</li>
+          <li>Undo/redo stack</li>
+          <li>Dark theme UI</li>
+        </ul>
+        """)
+        tabs.addTab(cl_tb, "Changelog")
+
+        lay.addWidget(tabs)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        btns.accepted.connect(dlg.accept)
+        lay.addWidget(btns)
+        dlg.exec()
 
 
 def main():
