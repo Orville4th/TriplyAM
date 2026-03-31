@@ -89,14 +89,12 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     from mesh_repair import weld_vertices, remove_degenerate
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
-    # lattice_thickness is now a DENSITY PERCENTAGE (0-99).
-    # threshold = density% / 100 * 0.9
-    # 0% = thin walls (small threshold = narrow solid band near field=0)
-    # 50% = medium walls
-    # 99% = near-solid (threshold=0.891, almost everything is solid)
-    # This is cell-size independent and directly intuitive.
-    density_pct = float(lattice_thickness)  # 0-99 range from UI
-    threshold = (density_pct / 100.0) * 0.9
+    # Physical formula: threshold = wall_mm * pi * sqrt(3) / cell_size
+    # This maps wall_mm directly to the isosurface band half-width.
+    # Increasing wall_mm ALWAYS increases wall thickness. No inversions, no caps.
+    # The voxel_size is adapted so the wall is always resolved by at least 3 voxels.
+    wall_mm = float(lattice_thickness)
+    threshold = wall_mm * np.pi * np.sqrt(3) / float(cell_size)
 
     pad = cell_size
     origin = mins - pad
@@ -137,6 +135,77 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
 
 
 # ── Main pipeline ──────────────────────────────────────────────────────────────
+
+def _remove_small_components(verts, faces, min_fraction=0.01):
+    """
+    Remove disconnected mesh components smaller than min_fraction of the
+    largest component. Eliminates floating geometry artifacts from the
+    lattice boolean operations.
+    """
+    if len(faces) == 0:
+        return verts, faces
+
+    # Build vertex adjacency and flood-fill to find connected components
+    from collections import defaultdict, deque
+    adj = defaultdict(set)
+    for tri in faces:
+        a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
+        adj[a].update([b, c])
+        adj[b].update([a, c])
+        adj[c].update([a, b])
+
+    visited = np.zeros(len(verts), dtype=bool)
+    components = []  # list of vertex index sets
+
+    for start in range(len(verts)):
+        if visited[start] or start not in adj:
+            continue
+        # BFS
+        component = set()
+        queue = deque([start])
+        while queue:
+            v = queue.popleft()
+            if visited[v]: continue
+            visited[v] = True
+            component.add(v)
+            for nb in adj[v]:
+                if not visited[nb]:
+                    queue.append(nb)
+        if component:
+            components.append(component)
+
+    if not components:
+        return verts, faces
+
+    # Keep only components larger than min_fraction * largest component
+    sizes = [len(c) for c in components]
+    max_size = max(sizes)
+    threshold_size = max(int(max_size * min_fraction), 10)
+
+    keep_verts = set()
+    for comp, size in zip(components, sizes):
+        if size >= threshold_size:
+            keep_verts.update(comp)
+
+    # Rebuild mesh keeping only faces where all 3 vertices are in keep_verts
+    keep_faces_mask = np.array([
+        int(f[0]) in keep_verts and int(f[1]) in keep_verts and int(f[2]) in keep_verts
+        for f in faces
+    ])
+    new_faces = faces[keep_faces_mask]
+
+    # Remap vertices
+    used = np.zeros(len(verts), dtype=bool)
+    used[new_faces.ravel()] = True
+    old_to_new = np.full(len(verts), -1, dtype=np.int32)
+    new_idx = np.where(used)[0]
+    old_to_new[new_idx] = np.arange(len(new_idx), dtype=np.int32)
+
+    new_verts = verts[new_idx]
+    new_faces_remapped = old_to_new[new_faces]
+
+    return new_verts.astype(np.float32), new_faces_remapped.astype(np.int32)
+
 
 def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
                      stl_faces=None, step_path=None,
@@ -183,7 +252,12 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
 
     # ── Voxel size ─────────────────────────────────────────────────────────────
     if resolution is None or resolution == 0:
-        voxel_size = float(np.clip(cell_size/8.0, 0.15, 0.4))
+        # Adapt voxel size to always resolve the wall thickness with ≥3 voxels.
+        # voxel = min(wall_mm/3, cell_size/8), bounded to 0.05..0.5mm.
+        wall_mm = float(lattice_thickness)
+        voxel_from_wall = wall_mm / 3.0 if wall_mm > 0 else cell_size / 8.0
+        voxel_from_cell = cell_size / 8.0
+        voxel_size = float(np.clip(min(voxel_from_wall, voxel_from_cell), 0.05, 0.5))
     else:
         voxel_size = float(np.clip(np.max(span)/resolution, 0.05, 1.0))
     _prog(f"Voxel size: {voxel_size:.3f}mm")
@@ -242,6 +316,10 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
     # ── Step 5: Extract result ─────────────────────────────────────────────────
     _prog("Extracting mesh...")
     rv, rf = _from_manifold(final_m)
+
+    # ── Step 6: Remove floating geometry (disconnected small components) ───────
+    _prog("Removing floating geometry...")
+    rv, rf = _remove_small_components(rv, rf)
 
     from collections import defaultdict
     ec = defaultdict(int)
