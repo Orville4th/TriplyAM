@@ -122,7 +122,8 @@ class LatticeWorker(QThread):
     error    = pyqtSignal(str)
 
     def __init__(self, stl_verts, wall_t, cell_sz, latt_t,
-                 ltype, res, sm_iter, sm_fac, wall_only, cancel_flag, stl_faces=None, step_path=None):
+                 ltype, res, sm_iter, sm_fac, wall_only, cancel_flag,
+                 stl_faces=None, step_path=None, n_seeds=300):
         super().__init__()
         self.stl_verts   = stl_verts
         self.stl_faces   = stl_faces
@@ -136,6 +137,7 @@ class LatticeWorker(QThread):
         self.sm_fac      = sm_fac
         self.wall_only   = wall_only
         self.cancel_flag = cancel_flag
+        self.n_seeds     = n_seeds
 
     def run(self):
         try:
@@ -149,6 +151,7 @@ class LatticeWorker(QThread):
                 smooth_iterations=self.sm_iter,
                 smooth_factor=self.sm_fac,
                 wall_only=self.wall_only,
+                n_seeds=self.n_seeds,
                 progress_cb=lambda m: self.progress.emit(m),
                 cancel_flag=self.cancel_flag,
             )
@@ -627,16 +630,25 @@ class TripLyWindow(QMainWindow):
         self.sp_latt  = StepSpin(0.1, 19.0, 1.5, 0.1)
         self.sp_res = StepSpin(0, 240, 0, 32)
         self.sp_res.spin.setSpecialValueText("Auto")
+        self.sp_seeds = StepSpin(50, 2000, 300, 50)
+        self.sp_seeds.spin.setSuffix("")
+        self._lbl_seeds = QLabel("Seed count:")
+        self._lbl_cell  = QLabel("Cell size:")
+        self._lbl_res   = QLabel("Resolution:")
         pf.addRow("Outer wall (0=none):", self.sp_wall)
-        pf.addRow("Cell size:",           self.sp_cell)
-        pf.addRow("Lattice wall (mm):", self.sp_latt)
-        pf.addRow("Resolution:",          self.sp_res)
+        pf.addRow(self._lbl_cell,         self.sp_cell)
+        pf.addRow("Lattice wall (mm):",   self.sp_latt)
+        pf.addRow(self._lbl_res,          self.sp_res)
+        pf.addRow(self._lbl_seeds,        self.sp_seeds)
         lay.addLayout(pf)
         # Note under lattice wall thickness
         latt_note = QLabel("Sets physical wall thickness in mm. Larger cells support thicker walls. Minimum visible ≈ 1mm.")
         latt_note.setStyleSheet("color:#888; font-size:10px; padding-left:2px;")
         latt_note.setWordWrap(True)
         lay.addWidget(latt_note)
+        # Wire type combo to show/hide Voronoi-specific controls
+        self.combo_ltype.currentTextChanged.connect(self._on_ltype_changed)
+        self._on_ltype_changed(self.combo_ltype.currentText())
         # Wall thickness in mm — no dynamic coupling needed
         self.chk_no_shell = QCheckBox("Lattice only (no outer shell)")
         self.chk_no_shell.toggled.connect(lambda v: self.sp_wall.setEnabled(not v))
@@ -670,6 +682,16 @@ class TripLyWindow(QMainWindow):
         btn_cancel_lat.setVisible(False); self._btn_cancel_lat = btn_cancel_lat
         lay.addWidget(btn_cancel_lat)
         lay.addStretch(); return w
+
+    def _on_ltype_changed(self, ltype):
+        """Show/hide Voronoi-specific (seeds) and TPMS-specific (cell, resolution) controls."""
+        is_voronoi = ltype.startswith("Voronoi")
+        self._lbl_seeds.setVisible(is_voronoi)
+        self.sp_seeds.setVisible(is_voronoi)
+        self._lbl_cell.setVisible(not is_voronoi)
+        self.sp_cell.setVisible(not is_voronoi)
+        self._lbl_res.setVisible(not is_voronoi)
+        self.sp_res.setVisible(not is_voronoi)
 
     # ------------------------------------------------------------------
     # PACK TAB
@@ -1589,7 +1611,8 @@ class TripLyWindow(QMainWindow):
             self.sp_res.value(), self.sp_sm_i.value(), self.sp_sm_f.value(),
             self.chk_no_shell.isChecked(), self._cancel_flag,
             stl_faces=p.get('faces'),
-            step_path=step_path
+            step_path=step_path,
+            n_seeds=int(self.sp_seeds.value())
         )
         self._lat_worker.progress.connect(self._on_lat_progress)
         self._lat_worker.finished.connect(lambda v,f: self._on_lat_done(p['id'],v,f))
@@ -1603,7 +1626,11 @@ class TripLyWindow(QMainWindow):
         steps={'Cleaning':10,'Grid':15,'Making part':20,'Evaluating':30,
                'Marching':50,'Welding':60,'Smooth':68,'Building manifold':72,
                'Boolean: TPMS':80,'Building hollow':85,'Clipping TPMS':88,
-               'Combining':92,'pymeshfix':96,'Done':100}
+               'Combining':92,'pymeshfix':96,'Done':100,
+               # Voronoi steps
+               'placing':12,'computing diagram':20,'extracting edges':30,
+               'building':40,'unioning cylinders':60,'boundary nodes':75,
+               'boundary connections':82,'clipping to part':90}
         if hasattr(self,'lat_prog'):
             for k,p in steps.items():
                 if k.lower() in msg.lower():
@@ -2008,7 +2035,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.2.29":
+        if self._cfg.get("terms_agreed_version") == "0.3.0":
             self._agreed_to_terms = True
             return True
 
@@ -2040,7 +2067,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.29 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.0 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2110,17 +2137,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.2.29"
+            self._cfg["terms_agreed_version"] = "0.3.0"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.2.29":
+        if self._cfg.get("whats_new_shown_version") == "0.3.0":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.2.29"
+        self._cfg["whats_new_shown_version"] = "0.3.0"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2128,13 +2155,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.2.25")
+        dlg.setWindowTitle("What's new in TriplyAM 0.3.0")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.2.25</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.0</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2142,18 +2169,16 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>Wall thickness fully decoupled from cell size</b> — changing cell size no longer affects wall thickness</li>
-          <li><b>Physical wall thickness in mm</b> — 2mm wall = 2mm thick struts, always</li>
-          <li><b>Floating geometry removed</b> — small disconnected pieces after lattice generation are automatically cleaned up</li>
-          <li><b>Gizmo easier to grab</b> — larger hit area, works correctly on HiDPI displays</li>
-          <li><b>Ctrl+A then Delete works</b> — multi-select delete now fully functional</li>
-          <li><b>Accent color picker</b> — change the UI accent color live under Settings</li>
-          <li><b>Packing spacing fixed</b> — X and Y gaps are now symmetric</li>
+          <li><b>Voronoi lattice — Shell-on</b> — organic strut network, arms touch shell wall naturally</li>
+          <li><b>Voronoi lattice — Shell-off</b> — Carbon-style closed network, boundary arms seal and connect to nearest neighbour (Y-junction)</li>
+          <li><b>Seed count slider</b> — controls Voronoi density (50–2000 seeds)</li>
+          <li><b>Fixed lattice boolean</b> — TPMS now correctly clips to cavity</li>
+          <li><b>Fixed accent color persistence</b> — bounding box and parts tree now hold their color after restart</li>
         </ul>
         <p><b>Coming soon:</b></p>
         <ul>
-          <li>Voronoi lattice generation</li>
           <li>Feature-size aware TPMS</li>
+          <li>Face preservation for mechanical interfaces</li>
           <li>3D file browser with thumbnail previews</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
@@ -2200,7 +2225,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.2.29 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.3.0 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2240,13 +2265,17 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.2.29 — Beta <span class='tag'>current</span></h3>
+        <h3>0.3.0 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Fixed lattice boolean operation — TPMS now correctly clips to cavity (was XOR, now intersection)</li>
-          <li>Fixed accent color not persisting on build volume box and parts tree after restart</li>
+          <li>Voronoi lattice — Shell-on mode (arms touch wall naturally)</li>
+          <li>Voronoi lattice — Shell-off / Carbon-style (arms seal at boundary, Y-junction connections)</li>
+          <li>Seed count control (50–2000) — adjust Voronoi density</li>
+          <li>Cell size and Resolution controls auto-hide when Voronoi is selected</li>
+          <li>Fixed lattice boolean operation — TPMS clips to cavity correctly (was XOR, now intersection)</li>
+          <li>Fixed accent color persistence — bounding box and parts tree now hold saved color on restart</li>
         </ul>
 
-        <h3>0.2.28 — Beta</h3>
+        <h3>0.2.29 — Beta</h3>
         <ul>
           <li>Fixed wall thickness inversion — small value = thin walls, large value = thick walls</li>
           <li>Wall max raised to 19mm for large cell sizes</li>
