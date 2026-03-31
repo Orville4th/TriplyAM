@@ -95,7 +95,8 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     # the actual field so it adapts to any TPMS type.
     # Cell size only controls repeat frequency — does NOT affect threshold.
     wall_mm = float(lattice_thickness)
-    WALL_SCALE = 5.0  # reference: 5mm wall = solid body
+    WALL_SCALE = 20.0  # reference: 20mm wall = solid body
+                       # allows wall_mm up to ~19mm for large cells
 
     pad = cell_size
     origin = mins - pad
@@ -111,28 +112,40 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     field = fn(X, Y, Z, cell_size)
 
-    # Compute threshold from actual field range — fully decoupled from cell_size.
-    # field_max varies slightly by TPMS type; using the actual value ensures
-    # wall_mm=WALL_SCALE always produces a solid regardless of TPMS type.
+    # Compute threshold — fully decoupled from cell_size.
+    # sdf = |field| - threshold (inverted from naive approach)
+    # sdf > 0 where |field| > threshold = OPEN POCKETS (void)
+    # sdf < 0 where |field| < threshold = GYROID WALL MATERIAL (solid)
+    # marching_cubes extracts sdf=0 surface, enclosing sdf<0 (the walls)
+    # Result: small threshold = thin walls, large threshold = thick walls ✓
     field_abs = np.abs(field)
     field_max = float(field_abs.max())
     if field_max < 1e-6:
         field_max = 1.0
 
-    threshold = min((wall_mm / WALL_SCALE) * field_max, field_max * 0.95)
-    threshold = max(threshold, field_max * 0.01)  # minimum visible wall
+    # Map wall_mm linearly: 0mm -> no walls, WALL_SCALE -> solid
+    # WALL_SCALE is set so the full 0..field_max range is usable
+    threshold = (wall_mm / WALL_SCALE) * field_max
+    threshold = max(threshold, field_max * 0.005)   # minimum — avoid empty mesh
+    threshold = min(threshold, field_max * 0.98)    # maximum — avoid fully solid
 
-    sdf = (threshold - field_abs).astype(np.float32)
+    # INVERTED sdf: solid where |field| < threshold (the gyroid shell)
+    sdf = (field_abs - threshold).astype(np.float32)
 
-    # Seal boundaries
-    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
+    # Seal boundaries as VOID (negative) so marching cubes doesn't
+    # create a solid shell around the entire volume
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
 
     # Verify the isosurface exists before calling marching_cubes
-    if sdf.min() >= 0 or sdf.max() <= 0:
+    if sdf.min() >= 0:
         raise ValueError(
-            f"Wall thickness ({float(lattice_thickness):.2f}mm) is too large for "
-            f"cell size ({float(cell_size):.2f}mm) — the lattice would be solid. "
-            f"Try reducing wall thickness or increasing cell size."
+            f"Wall thickness ({wall_mm:.2f}mm) is too small — no gyroid walls visible. "
+            f"Try increasing wall thickness above 0.1mm."
+        )
+    if sdf.max() <= 0:
+        raise ValueError(
+            f"Wall thickness ({wall_mm:.2f}mm) is too large — model would be solid. "
+            f"Try reducing wall thickness below {WALL_SCALE*0.95:.1f}mm."
         )
 
     lv, lf, _, _ = marching_cubes(sdf, level=0.0,

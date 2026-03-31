@@ -74,6 +74,7 @@ class Viewport3D(QOpenGLWidget):
         self._gizmo_drag_start      = None
         self._gizmo_mesh_offset_start = None
         self._gizmo_size            = 40.0
+        self._accent_color          = (0.545, 0.063, 0.063)  # default crimson RGB
 
     # ------------------------------------------------------------------
     # Config
@@ -86,6 +87,11 @@ class Viewport3D(QOpenGLWidget):
 
     def set_show_build_volume(self, show):
         self._show_bv = show; self.update()
+
+    def set_accent_color(self, r, g, b):
+        """Set accent color for build volume box and gizmo highlights."""
+        self._accent_color = (r, g, b)
+        self.update()
 
     def set_selected(self, idx):
         self._selected = idx
@@ -371,7 +377,9 @@ class Viewport3D(QOpenGLWidget):
                 glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
     def _draw_bv(self, bx, by, bz, ox, label):
-        glDisable(GL_LIGHTING); glColor3f(0.54,0.08,0.08); glLineWidth(1.2)
+        glDisable(GL_LIGHTING)
+        glColor3f(*self._accent_color)
+        glLineWidth(1.2)
         c=[(ox,0,0),(ox+bx,0,0),(ox+bx,by,0),(ox,by,0),
            (ox,0,bz),(ox+bx,0,bz),(ox+bx,by,bz),(ox,by,bz)]
         glBegin(GL_LINES)

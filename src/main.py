@@ -261,7 +261,10 @@ class TripLyWindow(QMainWindow):
         # Apply saved accent color if set
         saved_accent = self._cfg.get("accent_color")
         if saved_accent and saved_accent != "#8B0000":
-            self._apply_accent_color(saved_accent)
+            try:
+                self._apply_accent_color(saved_accent)
+            except Exception:
+                self._cfg.pop("accent_color", None)
         self._build_ui()
         self._apply_mouse()
         self._update_bv()
@@ -621,7 +624,7 @@ class TripLyWindow(QMainWindow):
         self.sp_wall  = StepSpin(0.0,20.0,1.5,0.1)
         self.sp_cell  = StepSpin(2.0,50.0,8.0,0.5)
         # Max lattice wall = cell_size - 0.01 (enforced dynamically)
-        self.sp_latt  = StepSpin(0.1, 50.0, 1.5, 0.1)
+        self.sp_latt  = StepSpin(0.1, 19.0, 1.5, 0.1)
         self.sp_res = StepSpin(0, 240, 0, 32)
         self.sp_res.spin.setSpecialValueText("Auto")
         pf.addRow("Outer wall (0=none):", self.sp_wall)
@@ -1058,6 +1061,20 @@ class TripLyWindow(QMainWindow):
             grid.addWidget(btn, i//2, i%2)
 
         lay.addLayout(grid)
+
+        # Custom color button
+        from PyQt6.QtWidgets import QColorDialog
+        def pick_custom():
+            current_hex = self._cfg.get("accent_color", "#8B0000")
+            color = QColorDialog.getColor(
+                QColor(current_hex), dlg, "Choose Custom Accent Color"
+            )
+            if color.isValid():
+                apply_color(color.name())
+        btn_custom = QPushButton("Custom color…")
+        btn_custom.clicked.connect(pick_custom)
+        lay.addWidget(btn_custom)
+
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         btns.rejected.connect(dlg.reject)
         lay.addWidget(btns)
@@ -1083,6 +1100,8 @@ class TripLyWindow(QMainWindow):
         for p in self._parts.values():
             color = ACCENT_RGB if p['mesh_idx']==sel else (0.62,0.62,0.62)
             self.viewport.set_mesh_color(p['mesh_idx'], color)
+        # Update build volume box color
+        self.viewport.set_accent_color(*ACCENT_RGB)
         self.viewport.update()
 
     def _cleanup_build_volumes(self):
@@ -1118,15 +1137,17 @@ class TripLyWindow(QMainWindow):
         self._update_props()
 
     def _select_all(self):
-        for p in self._parts.values():
-            if p.get('parent') is None:
-                self.viewport.set_mesh_color(p['mesh_idx'], ACCENT_RGB)
         # Select all top-level items (parts only, not __lattice__ children)
+        self.tree.clearSelection()
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
-            if item:
+            if item and item.data(0, Qt.ItemDataRole.UserRole) != '__lattice__':
                 item.setSelected(True)
-        self.status.showMessage(f"Selected all {len(self._parts)} parts — press Delete to remove")
+                pid = item.data(0, Qt.ItemDataRole.UserRole)
+                if pid and pid in self._parts:
+                    self.viewport.set_mesh_color(self._parts[pid]['mesh_idx'], ACCENT_RGB)
+        count = len(self.tree.selectedItems())
+        self.status.showMessage(f"Selected {count} parts — press Delete to remove")
         self._update_props()
 
     def _copy_sel(self):
@@ -1555,11 +1576,11 @@ class TripLyWindow(QMainWindow):
         step_path=src_path if src_path and src_path.lower().endswith(('.step','.stp')) else None
         # Warn if wall thickness >= 5mm (reference solid point)
         wall_mm = self.sp_latt.value()
-        if wall_mm >= 5.0:
+        if wall_mm >= 19.0:
             QMessageBox.warning(self, "Wall Too Thick",
-                f"Wall thickness {wall_mm:.1f}mm is at or above the solid reference (5mm). "
-                f"This will produce a near-solid body with no visible lattice voids.\n\n"
-                f"Recommended range: 0.5mm – 3.0mm for visible lattice structure.")
+                f"Wall thickness {wall_mm:.1f}mm is at the maximum. "
+                f"This will produce a near-solid body.\n\n"
+                f"Recommended range: 0.5mm – 10.0mm for visible lattice structure.")
             return
 
         self._lat_worker=LatticeWorker(
@@ -1987,7 +2008,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.2.27":
+        if self._cfg.get("terms_agreed_version") == "0.2.28":
             self._agreed_to_terms = True
             return True
 
@@ -2019,7 +2040,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.27 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.28 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2089,17 +2110,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.2.27"
+            self._cfg["terms_agreed_version"] = "0.2.28"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.2.27":
+        if self._cfg.get("whats_new_shown_version") == "0.2.28":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.2.27"
+        self._cfg["whats_new_shown_version"] = "0.2.28"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2179,7 +2200,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.2.27 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.2.28 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2219,7 +2240,18 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.2.27 — Beta <span class='tag'>current</span></h3>
+        <h3>0.2.28 — Beta <span class='tag'>current</span></h3>
+        <ul>
+          <li>Fixed wall thickness inversion — small value = thin walls, large value = thick walls</li>
+          <li>Wall max raised to 19mm for large cell sizes</li>
+          <li>Fixed crash on reopen after setting accent color</li>
+          <li>Custom color picker added to accent color dialog (color wheel + RGB input)</li>
+          <li>Accent color now also applies to build volume boundary box</li>
+          <li>Fixed Ctrl+A select-all — now correctly selects all parts</li>
+          <li>Boundary sealing fixed — no forced solid shell around lattice volume</li>
+        </ul>
+
+        <h3>0.2.27 — Beta</h3>
         <ul>
           <li>Wall thickness fully decoupled from cell size — changing cell size no longer affects wall thickness</li>
           <li>Physical formula: threshold = (wall_mm / 5.0) × field_max — cell-size independent</li>
