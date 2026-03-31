@@ -27,7 +27,12 @@ def hex_to_rgb(h):
 ACCENT_RGB  = hex_to_rgb(ACCENT)
 NEUTRAL_RGB = hex_to_rgb(NEUTRAL)
 
-APP_STYLESHEET = f"""
+def build_stylesheet(accent=ACCENT):
+    """Build stylesheet with the given accent color."""
+    h = accent.lstrip('#')
+    r,g,b = int(h[0:2],16), int(h[2:4],16), int(h[4:6],16)
+    hover = f"#{min(255,r+25):02x}{min(255,g+25):02x}{min(255,b+25):02x}"
+    return f"""
 QMainWindow, QWidget, QDialog {{
     background-color: {BG};
     color: {TEXT_PRI};
@@ -274,3 +279,5 @@ QToolTip {{
     border-top: 1px solid {BORDER};
 }}
 """
+
+APP_STYLESHEET = build_stylesheet()

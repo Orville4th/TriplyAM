@@ -89,10 +89,12 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     from mesh_repair import weld_vertices, remove_degenerate
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
-    # Threshold controls strut width. Formula: (wall/cell) * K, capped at 0.9.
-    # K=1.8 gives a good visible range — default 0.8mm wall on 8mm cell gives
-    # threshold=0.18 (medium strut), and the full range stays usable up to cell_size.
-    # This keeps strut width independent of cell size while remaining physically meaningful.
+    # Threshold formula: (wall_mm / cell_mm) * K, capped at 0.9.
+    # K=1.8 gives cell-independent visual appearance — the same ratio always
+    # produces the same relative strut thickness regardless of cell size.
+    # Physical note: a 2mm wall in a 5mm cell looks "thicker" than a 2mm wall
+    # in a 15mm cell because it occupies a larger fraction — this is correct behavior.
+    # The UI default is 2.0mm which gives a clearly visible strut at typical cell sizes.
     t_frac = float(lattice_thickness) / float(cell_size)
     threshold = min(t_frac * 1.8, 0.9)
 

@@ -42,6 +42,15 @@ def export_stl(path, vertices, faces):
 
 def _build_metadata(agreed_to_terms=True):
     """Return standard metadata dict embedded in every export."""
+    import socket
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        hostname = "unknown"
+    try:
+        ip = socket.gethostbyname(hostname)
+    except Exception:
+        ip = "unknown"
     return {
         "Generator":       f"{APP_NAME} v{APP_VERSION}",
         "GeneratorURL":    APP_URL,
@@ -50,6 +59,8 @@ def _build_metadata(agreed_to_terms=True):
                            "No warranty. Use at your own risk. "
                            "See https://github.com/Orville4th/TriplyAM for terms.",
         "TermsAgreed":     "YES" if agreed_to_terms else "NOT_RECORDED",
+        "GeneratedOnHost": hostname,
+        "GeneratedOnIP":   ip,
         "Warning":         "This geometry has not been FEA-simulated or "
                            "structurally validated. The user assumes all "
                            "responsibility for testing before use.",

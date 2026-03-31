@@ -235,6 +235,8 @@ class TripLyWindow(QMainWindow):
             font.setPointSizeF(font.pointSizeF() * scale)
             QApplication.setFont(font)
         self.resize(int(1440*scale), int(900*scale))
+        # Restore last screen position
+        self._restore_screen_position()
 
         self._parts         = {}
         self._next_id       = 0
@@ -256,6 +258,10 @@ class TripLyWindow(QMainWindow):
         self._agreed_to_terms = False  # Set True after startup disclaimer is accepted
 
         self.setStyleSheet(APP_STYLESHEET)
+        # Apply saved accent color if set
+        saved_accent = self._cfg.get("accent_color")
+        if saved_accent and saved_accent != "#8B0000":
+            self._apply_accent_color(saved_accent)
         self._build_ui()
         self._apply_mouse()
         self._update_bv()
@@ -275,7 +281,7 @@ class TripLyWindow(QMainWindow):
 
         # ── Sidebar ──────────────────────────────────────────────────
         sidebar = QWidget(); sidebar.setObjectName("sidebar")
-        sidebar.setMinimumWidth(280); sidebar.setMaximumWidth(400)
+        sidebar.setMinimumWidth(240); sidebar.setMaximumWidth(320)
         sb = QVBoxLayout(sidebar); sb.setContentsMargins(0,0,0,0); sb.setSpacing(0)
 
         self.tabs = QTabWidget()
@@ -419,11 +425,11 @@ class TripLyWindow(QMainWindow):
         self._act(em,"Duplicate","Ctrl+D",self._duplicate)
         self._act(em,"Select All","Ctrl+A",self._select_all)
         sm = mb.addMenu("Settings")
-        self._act(sm,"Mouse Controls…","",self._dlg_mouse)
+        self._act(sm,"Mouse Controls","",self._dlg_mouse)
         sm.addSeparator()
-        self._act(sm,"UI Scale…","",self._open_ui_scale_dialog)
+        self._act(sm,"Accent Color","",self._dlg_accent_color)
         sm.addSeparator()
-        self._act(sm,"About TriplyAM…","",self._dlg_about)
+        self._act(sm,"About TriplyAM","",self._dlg_about)
 
     def _act(self, menu, text, shortcut, slot):
         a = QAction(text, self)
@@ -614,7 +620,7 @@ class TripLyWindow(QMainWindow):
         self.sp_wall  = StepSpin(0.0,20.0,1.5,0.1)
         self.sp_cell  = StepSpin(2.0,50.0,8.0,0.5)
         # Max lattice wall = cell_size - 0.01 (enforced dynamically)
-        self.sp_latt  = StepSpin(0.01, self.sp_cell.value()-0.01, 0.8, 0.1)
+        self.sp_latt  = StepSpin(0.1, self.sp_cell.value()-0.01, 2.0, 0.1)
         self.sp_res = StepSpin(0, 240, 0, 32)
         self.sp_res.spin.setSpecialValueText("Auto")
         pf.addRow("Outer wall (0=none):", self.sp_wall)
@@ -623,7 +629,7 @@ class TripLyWindow(QMainWindow):
         pf.addRow("Resolution:",          self.sp_res)
         lay.addLayout(pf)
         # Note under lattice wall thickness
-        latt_note = QLabel("Lattice wall thickness cannot equal Cell size.")
+        latt_note = QLabel("Wall thickness cannot equal Cell size. Larger cells need larger wall values to look the same.")
         latt_note.setStyleSheet("color:#888; font-size:10px; padding-left:2px;")
         latt_note.setWordWrap(True)
         lay.addWidget(latt_note)
@@ -946,6 +952,12 @@ class TripLyWindow(QMainWindow):
         pids_to_remove = []
         for item in selected:
             pid = item.data(0, Qt.ItemDataRole.UserRole)
+            # If user clicked the __lattice__ child label, use its parent part instead
+            if pid == '__lattice__':
+                parent_item = item.parent()
+                if parent_item:
+                    pid = parent_item.data(0, Qt.ItemDataRole.UserRole)
+                    item = parent_item
             if pid and pid != '__lattice__' and pid in self._parts:
                 pids_to_remove.append((pid, item))
         if not pids_to_remove: return
@@ -964,43 +976,120 @@ class TripLyWindow(QMainWindow):
             with open(self._settings_path,'w') as f: _json.dump(self._settings,f,indent=2)
         except: pass
 
-    def _open_ui_scale_dialog(self):
-        """Let user set UI scale factor for their display."""
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton
-        dlg=QDialog(self); dlg.setWindowTitle("UI Scale"); dlg.setFixedWidth(300)
-        lay=QVBoxLayout(dlg)
-        lay.addWidget(QLabel("Select UI scale for your display:"))
-        combo=QComboBox()
-        options=[("100% (default)",1.0),("110%",1.1),("125%",1.25),("150%",1.5),("175%",1.75),("200%",2.0)]
-        current=float(self._settings.get('ui_scale',1.0))
-        for label,val in options:
-            combo.addItem(label,val)
-        for i,(_,val) in enumerate(options):
-            if abs(val-current)<0.01: combo.setCurrentIndex(i)
-        lay.addWidget(combo)
-        note=QLabel("Restart TriplyAM to apply the new scale.")
-        note.setStyleSheet("color:#888;font-size:11px;"); note.setWordWrap(True)
-        lay.addWidget(note)
-        btns=QHBoxLayout()
-        ok=QPushButton("Apply & Restart"); cancel=QPushButton("Cancel")
-        btns.addWidget(ok); btns.addWidget(cancel); lay.addLayout(btns)
-        cancel.clicked.connect(dlg.reject)
-        def apply():
-            self._settings['ui_scale']=combo.currentData()
-            self._save_settings()
+    def _restore_screen_position(self):
+        """Restore window to the last used screen and position."""
+        from PyQt6.QtWidgets import QApplication
+        screens = QApplication.screens()
+        saved_screen = self._settings.get('last_screen_index', 0)
+        saved_x = self._settings.get('last_win_x')
+        saved_y = self._settings.get('last_win_y')
+        if saved_screen < len(screens) and saved_x is not None:
+            geo = screens[saved_screen].geometry()
+            # Clamp position to be within the screen
+            x = max(geo.x(), min(int(saved_x), geo.x() + geo.width() - 100))
+            y = max(geo.y(), min(int(saved_y), geo.y() + geo.height() - 100))
+            self.move(x, y)
+
+    def _save_screen_position(self):
+        """Save current screen index and window position."""
+        from PyQt6.QtWidgets import QApplication
+        screens = QApplication.screens()
+        win_center = self.geometry().center()
+        for i, screen in enumerate(screens):
+            if screen.geometry().contains(win_center):
+                self._settings['last_screen_index'] = i
+                break
+        self._settings['last_win_x'] = self.x()
+        self._settings['last_win_y'] = self.y()
+        self._save_settings()
+
+    def closeEvent(self, event):
+        self._save_screen_position()
+        super().closeEvent(event)
+
+    def _center_dialog_on_screen(self, dlg):
+        """Center a dialog on the same screen as the main window."""
+        from PyQt6.QtWidgets import QApplication
+        screen = QApplication.screenAt(self.geometry().center())
+        if screen is None:
+            screen = QApplication.primaryScreen()
+        sg = screen.geometry()
+        dg = dlg.frameGeometry()
+        dlg.move(sg.center().x() - dg.width()//2,
+                 sg.center().y() - dg.height()//2)
+
+    def _dlg_accent_color(self):
+        """Let user pick the accent color — applied live, no restart needed."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QGridLayout, QPushButton, QDialogButtonBox, QLabel
+        from PyQt6.QtGui import QColor
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Accent Color")
+        dlg.setFixedWidth(320)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("Choose an accent color:"))
+
+        COLORS = [
+            ("Crimson (default)", "#8B0000"),
+            ("Deep Red",          "#C0392B"),
+            ("Burnt Orange",      "#A04000"),
+            ("Forest Green",      "#1E6B1E"),
+            ("Teal",              "#0E7373"),
+            ("Ocean Blue",        "#1A5276"),
+            ("Royal Blue",        "#1F4FA3"),
+            ("Purple",            "#6C3483"),
+            ("Magenta",           "#8E1A6A"),
+            ("Slate",             "#4A5568"),
+        ]
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        current = self._cfg.get("accent_color", "#8B0000")
+
+        def apply_color(hex_color):
+            self._cfg["accent_color"] = hex_color
+            save_config(self._cfg)
+            self._apply_accent_color(hex_color)
             dlg.accept()
-            import subprocess, sys, os as _os
-            # Relaunch correctly whether running as AppImage or plain Python
-            appimage = _os.environ.get('APPIMAGE')
-            if appimage and _os.path.exists(appimage):
-                # Running as AppImage — relaunch the AppImage itself
-                subprocess.Popen([appimage] + sys.argv[1:])
-            else:
-                # Running as plain Python — relaunch the script
-                subprocess.Popen([sys.executable] + sys.argv)
-            QApplication.quit()
-        ok.clicked.connect(apply)
+
+        for i, (name, hex_color) in enumerate(COLORS):
+            btn = QPushButton(name)
+            r,g,b = int(hex_color[1:3],16), int(hex_color[3:5],16), int(hex_color[5:7],16)
+            text_color = "#ffffff" if (r*0.299 + g*0.587 + b*0.114) < 128 else "#000000"
+            btn.setStyleSheet(
+                f"background:{hex_color}; color:{text_color}; border:none; "
+                f"border-radius:4px; padding:6px 10px; font-weight:500;"
+                + ("border:2px solid white;" if hex_color.lower()==current.lower() else "")
+            )
+            btn.clicked.connect(lambda checked, c=hex_color: apply_color(c))
+            grid.addWidget(btn, i//2, i%2)
+
+        lay.addLayout(grid)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        self._center_dialog_on_screen(dlg)
         dlg.exec()
+
+    def _apply_accent_color(self, hex_color):
+        """Apply accent color live — rebuild stylesheet and refresh viewport."""
+        import ui.theme as _theme
+        from ui.theme import hex_to_rgb
+        # Update theme module globals
+        _theme.ACCENT = hex_color
+        _theme.ACCENT_RGB = hex_to_rgb(hex_color)
+        # Rebuild stylesheet with new accent and apply immediately
+        new_ss = _theme.build_stylesheet(accent=hex_color)
+        self.setStyleSheet(new_ss)
+        # Update this module's globals too
+        global ACCENT, ACCENT_RGB
+        ACCENT = hex_color
+        ACCENT_RGB = hex_to_rgb(hex_color)
+        # Refresh selected part highlight in viewport
+        sel = self.viewport._selected
+        for p in self._parts.values():
+            color = ACCENT_RGB if p['mesh_idx']==sel else (0.62,0.62,0.62)
+            self.viewport.set_mesh_color(p['mesh_idx'], color)
+        self.viewport.update()
 
     def _cleanup_build_volumes(self):
         """Remove empty build volumes — recalculate how many are needed."""
@@ -1891,7 +1980,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "beta-23":
+        if self._cfg.get("terms_agreed_version") == "0.2.24":
             self._agreed_to_terms = True
             return True
 
@@ -1923,7 +2012,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.0 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.24 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -1989,16 +2078,22 @@ class TripLyWindow(QMainWindow):
         btn_agree.clicked.connect(dlg.accept)
         btn_decline.clicked.connect(dlg.reject)
 
+        self._center_dialog_on_screen(dlg)
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "beta-23"
+            self._cfg["terms_agreed_version"] = "0.2.24"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
-        """Show what's new in this version after terms are accepted."""
+        """Show what's new in this version — only once per version."""
+        if self._cfg.get("whats_new_shown_version") == "0.2.24":
+            return
+        # Mark as shown for this version
+        self._cfg["whats_new_shown_version"] = "0.2.24"
+        save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
         from PyQt6.QtCore import Qt
@@ -2038,6 +2133,7 @@ class TripLyWindow(QMainWindow):
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         btns.accepted.connect(dlg.accept)
         lay.addWidget(btns)
+        self._center_dialog_on_screen(dlg)
         dlg.exec()
 
     def _dlg_about(self):
@@ -2072,7 +2168,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.2.0 (Beta)</span>"
+            "<br><span style='color:#888;'>Version 0.2.24 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2112,21 +2208,35 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>v0.2.0 — Beta 23 <span class='tag'>current</span></h3>
+        <h3>0.2.24 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Fixed invisible gyroid struts — threshold formula was 6x too thin after beta-19 changes</li>
+          <li>Popups now always appear on the same screen as the main window</li>
+          <li>App remembers which screen it was last used on</li>
+          <li>Fixed: can now delete parts that have had TPMS applied</li>
+          <li>Fixed: gizmo now activates correctly after lattice is applied</li>
+          <li>Settings menu items no longer show "..." truncation</li>
+          <li>What's new popup only shows once per version</li>
+          <li>PC hostname and IP embedded in 3MF export metadata</li>
+          <li>UI Scale option removed (caused confusion) — replaced with Accent Color</li>
+          <li>Accent Color picker — change the red to blue, purple, green etc. live with no restart</li>
+          <li>Left sidebar narrower</li>
+          <li>Version numbering updated to 0.2.24 format</li>
+        </ul>
+
+        <h3>0.2.23 — Beta</h3>
+        <ul>
+          <li>Fixed invisible gyroid struts — threshold formula was 6x too thin after 0.2.19 changes</li>
           <li>Fixed faceted shading — VBO upload now waits for OpenGL context to be ready</li>
-          <li>Terms agreement now re-appears with each new release version</li>
+          <li>Terms agreement re-appears with each new release version</li>
           <li>What's new popup added after terms agreement on first launch of each version</li>
-          <li>UI scale now correctly restarts the app whether running as AppImage or plain Python</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 22</h3>
+        <h3>0.2.22 — Beta</h3>
         <ul>
-          <li>Fixed missing export_stl in lattice pipeline — gyroid generation in cylinders and other shapes now works correctly</li>
+          <li>Fixed missing export_stl in lattice pipeline — gyroid generation in cylinders now works</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 21</h3>
+        <h3>0.2.21 — Beta</h3>
         <ul>
           <li>Startup terms and disclaimer screen — must agree to use the app</li>
           <li>3MF is now the default and only user export format (STL removed)</li>
@@ -2134,14 +2244,14 @@ class TripLyWindow(QMainWindow):
           <li>STEP export retains metadata in file header</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 20</h3>
+        <h3>0.2.20 — Beta</h3>
         <ul>
           <li>App icon now appears in taskbar, title bar, and About screen</li>
           <li>Fixed build script to use real triplyam_icon.png instead of generated placeholder</li>
           <li>APPDIR exported in AppRun so icon is found at runtime inside AppImage</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 19</h3>
+        <h3>0.2.19 — Beta</h3>
         <ul>
           <li>Fixed lattice wall thickness range — now spans full 0 to cell_size - 0.01</li>
           <li>Lattice wall max dynamically updates when cell size changes</li>
@@ -2149,7 +2259,7 @@ class TripLyWindow(QMainWindow):
           <li>Threshold formula rewritten as linear mapping — full range now usable</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 18</h3>
+        <h3>0.2.18 — Beta</h3>
         <ul>
           <li>Fixed multi-select delete — Ctrl+A then Delete now removes all parts</li>
           <li>Fixed lattice wall thickness control — strut width now independent of cell size</li>
@@ -2158,21 +2268,21 @@ class TripLyWindow(QMainWindow):
           <li>TriplyAM icon added to About screen header</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 17</h3>
+        <h3>0.2.17 — Beta</h3>
         <ul>
           <li>App renamed from Triply to TriplyAM everywhere</li>
           <li>New TriplyAM icon — lattice-T logo on grey-blue background</li>
           <li>VBO (Vertex Buffer Object) GPU rendering — major performance improvement for dense meshes</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 16</h3>
+        <h3>0.2.16 — Beta</h3>
         <ul>
           <li>App renamed from Triply to <b>TriplyAM</b></li>
           <li>New TriplyAM icon — lattice-T logo on grey-blue background</li>
           <li>VBO (Vertex Buffer Object) GPU rendering — major performance improvement for dense meshes</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 15</h3>
+        <h3>0.2.15 — Beta</h3>
         <ul>
           <li>Topology-correct section caps — gyroid pockets now show as open voids (like Blender)</li>
           <li>Last import/export directory now remembered between sessions</li>
@@ -2182,7 +2292,7 @@ class TripLyWindow(QMainWindow):
           <li>Removed chmod requirement from release notes — AppImage is double-click ready</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 14</h3>
+        <h3>0.2.14 — Beta</h3>
         <ul>
           <li>AppImage now fully self-contained — bundles Python 3.11, stdlib, and all dependencies</li>
           <li>Fixed PYTHONHOME — Python no longer looks for stdlib on the host machine</li>
@@ -2192,7 +2302,7 @@ class TripLyWindow(QMainWindow):
           <li>Wayland/X11 auto-detection in AppRun</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 13</h3>
+        <h3>0.2.13 — Beta</h3>
         <ul>
           <li>Fixed OpenGL Compatibility Profile — legacy lighting calls now work on modern Mesa drivers</li>
           <li>Fixed HiDPI mesh selection — click coordinates now scale by devicePixelRatio</li>
@@ -2200,7 +2310,7 @@ class TripLyWindow(QMainWindow):
           <li>Added missing system libs (libxcb-cursor0, libxkbcommon-x11-0, libegl1) to CI</li>
         </ul>
 
-        <h3>v0.2.0 — Beta 12 and earlier</h3>
+        <h3>0.2.12 and earlier — Beta</h3>
         <ul>
           <li>Initial AppImage packaging via GitHub Actions</li>
           <li>Windows installer via PyInstaller + Inno Setup</li>
@@ -2209,7 +2319,7 @@ class TripLyWindow(QMainWindow):
           <li>Fixed AppImage output filename case (.AppImage → .appimage)</li>
         </ul>
 
-        <h3>v0.1.0 — Initial release</h3>
+        <h3>0.1.0 — Initial release</h3>
         <ul>
           <li>TPMS lattice generation pipeline (MeshLib + manifold3d + scikit-image)</li>
           <li>3D viewport with orbit, pan, zoom, wireframe, section slider</li>
@@ -2226,6 +2336,7 @@ class TripLyWindow(QMainWindow):
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         btns.accepted.connect(dlg.accept)
         lay.addWidget(btns)
+        self._center_dialog_on_screen(dlg)
         dlg.exec()
 
 
