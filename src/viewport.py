@@ -111,6 +111,9 @@ class Viewport3D(QOpenGLWidget):
     def _upload_vbo(self, idx):
         """Upload mesh data to GPU as VBO. Called after verts/normals/faces change."""
         mesh = self._meshes[idx]
+        # Only upload if we have a valid GL context — defer otherwise
+        if not self.isValid() or not self.context() or not self.context().isValid():
+            return
         self.makeCurrent()
         from OpenGL.GL import glGenBuffers, glBindBuffer, glBufferData, GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW
         # Interleaved: [x,y,z, nx,ny,nz] per vertex  (6 floats = 24 bytes)
@@ -202,6 +205,10 @@ class Viewport3D(QOpenGLWidget):
     # ------------------------------------------------------------------
     def initializeGL(self):
         glClearColor(0.07,0.07,0.08,1.0)
+        # Upload VBOs for any meshes that were added before context was ready
+        for idx in list(self._meshes.keys()):
+            if not self._meshes[idx].get('vbo_vert'):
+                self._upload_vbo(idx)
         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); glDepthMask(GL_TRUE)
         glDisable(GL_BLEND); glDisable(GL_CULL_FACE)
         glEnable(GL_LIGHTING); glEnable(GL_LIGHT0); glEnable(GL_LIGHT1)

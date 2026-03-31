@@ -989,8 +989,15 @@ class TripLyWindow(QMainWindow):
             self._settings['ui_scale']=combo.currentData()
             self._save_settings()
             dlg.accept()
-            import subprocess, sys
-            subprocess.Popen([sys.executable]+sys.argv)
+            import subprocess, sys, os as _os
+            # Relaunch correctly whether running as AppImage or plain Python
+            appimage = _os.environ.get('APPIMAGE')
+            if appimage and _os.path.exists(appimage):
+                # Running as AppImage — relaunch the AppImage itself
+                subprocess.Popen([appimage] + sys.argv[1:])
+            else:
+                # Running as plain Python — relaunch the script
+                subprocess.Popen([sys.executable] + sys.argv)
             QApplication.quit()
         ok.clicked.connect(apply)
         dlg.exec()
@@ -1884,7 +1891,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.2.0":
+        if self._cfg.get("terms_agreed_version") == "beta-23":
             self._agreed_to_terms = True
             return True
 
@@ -1985,10 +1992,53 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.2.0"
+            self._cfg["terms_agreed_version"] = "beta-23"
             save_config(self._cfg)
             return True
         return False
+
+    def _show_whats_new(self):
+        """Show what's new in this version after terms are accepted."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
+        from PyQt6.QtGui import QPixmap
+        from PyQt6.QtCore import Qt
+        import os as _os
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("What's new in TriplyAM beta-23")
+        dlg.setMinimumWidth(480)
+        dlg.setMinimumHeight(400)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+
+        hdr = QLabel("<b style='font-size:14px;'>What's new in beta-23</b>")
+        lay.addWidget(hdr)
+
+        tb = QTextBrowser()
+        tb.setHtml("""
+        <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
+        <p><b>Bug fixes:</b></p>
+        <ul>
+          <li><b>Gyroid now visible</b> — fixed invisible lattice struts caused by threshold formula being 6x too thin</li>
+          <li><b>Smooth shading restored</b> — fixed faceted shadows caused by VBO upload timing before OpenGL context was ready</li>
+          <li><b>Lattice wall thickness</b> — control now has a good visible range across all cell sizes</li>
+        </ul>
+        <p><b>Coming soon:</b></p>
+        <ul>
+          <li>Voronoi lattice generation</li>
+          <li>Feature-size aware TPMS (auto-skips regions too thin for the lattice)</li>
+          <li>3D file browser with thumbnail previews</li>
+        </ul>
+        <p style='color:#888; font-size:11px;'>
+        Full changelog available in Help → About TriplyAM → Changelog tab.
+        </p>
+        """)
+        lay.addWidget(tb)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        btns.accepted.connect(dlg.accept)
+        lay.addWidget(btns)
+        dlg.exec()
 
     def _dlg_about(self):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTextBrowser, QDialogButtonBox, QLabel
@@ -2062,7 +2112,16 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>v0.2.0 — Beta 22 <span class='tag'>current</span></h3>
+        <h3>v0.2.0 — Beta 23 <span class='tag'>current</span></h3>
+        <ul>
+          <li>Fixed invisible gyroid struts — threshold formula was 6x too thin after beta-19 changes</li>
+          <li>Fixed faceted shading — VBO upload now waits for OpenGL context to be ready</li>
+          <li>Terms agreement now re-appears with each new release version</li>
+          <li>What's new popup added after terms agreement on first launch of each version</li>
+          <li>UI scale now correctly restarts the app whether running as AppImage or plain Python</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 22</h3>
         <ul>
           <li>Fixed missing export_stl in lattice pipeline — gyroid generation in cylinders and other shapes now works correctly</li>
         </ul>
@@ -2210,6 +2269,7 @@ def main():
     win=TripLyWindow()
     if not win._show_disclaimer():
         sys.exit(0)
+    win._show_whats_new()
     win.show()
     sys.exit(app.exec())
 
