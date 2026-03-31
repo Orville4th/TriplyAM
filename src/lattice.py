@@ -333,7 +333,7 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
 
     # ── Step 3: Clip TPMS to inner cavity ─────────────────────────────────────
     _prog("Clipping TPMS to cavity...")
-    inner_tpms_m = tpms_m ^ inner_m
+    inner_tpms_m = tpms_m & inner_m
     _prog(f"Inner TPMS: {inner_tpms_m.num_tri()} tris, vol={inner_tpms_m.volume():.0f}")
     _check()
 

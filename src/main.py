@@ -258,16 +258,16 @@ class TripLyWindow(QMainWindow):
         self._agreed_to_terms = False  # Set True after startup disclaimer is accepted
 
         self.setStyleSheet(APP_STYLESHEET)
-        # Apply saved accent color if set
+        self._build_ui()
+        self._apply_mouse()
+        self._update_bv()
+        # Apply saved accent color AFTER viewport and build volumes exist
         saved_accent = self._cfg.get("accent_color")
-        if saved_accent and saved_accent != "#8B0000":
+        if saved_accent:
             try:
                 self._apply_accent_color(saved_accent)
             except Exception:
                 self._cfg.pop("accent_color", None)
-        self._build_ui()
-        self._apply_mouse()
-        self._update_bv()
         # Start zoomed to default build volume
         bx,by,bz = self._bv
         self.viewport.fit_to_volume(bx, by, bz)
@@ -2008,7 +2008,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.2.28":
+        if self._cfg.get("terms_agreed_version") == "0.2.29":
             self._agreed_to_terms = True
             return True
 
@@ -2040,7 +2040,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.28 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.29 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2110,17 +2110,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.2.28"
+            self._cfg["terms_agreed_version"] = "0.2.29"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.2.28":
+        if self._cfg.get("whats_new_shown_version") == "0.2.29":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.2.28"
+        self._cfg["whats_new_shown_version"] = "0.2.29"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2200,7 +2200,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.2.28 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.2.29 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2240,7 +2240,13 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.2.28 — Beta <span class='tag'>current</span></h3>
+        <h3>0.2.29 — Beta <span class='tag'>current</span></h3>
+        <ul>
+          <li>Fixed lattice boolean operation — TPMS now correctly clips to cavity (was XOR, now intersection)</li>
+          <li>Fixed accent color not persisting on build volume box and parts tree after restart</li>
+        </ul>
+
+        <h3>0.2.28 — Beta</h3>
         <ul>
           <li>Fixed wall thickness inversion — small value = thin walls, large value = thick walls</li>
           <li>Wall max raised to 19mm for large cell sizes</li>
