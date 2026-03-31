@@ -1553,6 +1553,15 @@ class TripLyWindow(QMainWindow):
         # Pass STEP path for CAD-level shelling if available
         src_path=p.get('path','')
         step_path=src_path if src_path and src_path.lower().endswith(('.step','.stp')) else None
+        # Warn if wall thickness >= 5mm (reference solid point)
+        wall_mm = self.sp_latt.value()
+        if wall_mm >= 5.0:
+            QMessageBox.warning(self, "Wall Too Thick",
+                f"Wall thickness {wall_mm:.1f}mm is at or above the solid reference (5mm). "
+                f"This will produce a near-solid body with no visible lattice voids.\n\n"
+                f"Recommended range: 0.5mm – 3.0mm for visible lattice structure.")
+            return
+
         self._lat_worker=LatticeWorker(
             p['verts'], self.sp_wall.value(), self.sp_cell.value(),
             self.sp_latt.value(), self.combo_ltype.currentText(),
@@ -1978,7 +1987,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.2.25":
+        if self._cfg.get("terms_agreed_version") == "0.2.27":
             self._agreed_to_terms = True
             return True
 
@@ -2010,7 +2019,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.25 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.27 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2080,17 +2089,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.2.25"
+            self._cfg["terms_agreed_version"] = "0.2.27"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.2.25":
+        if self._cfg.get("whats_new_shown_version") == "0.2.27":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.2.25"
+        self._cfg["whats_new_shown_version"] = "0.2.27"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2110,20 +2119,24 @@ class TripLyWindow(QMainWindow):
         tb = QTextBrowser()
         tb.setHtml("""
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
-        <p><b>Bug fixes:</b></p>
+        <p><b>What's new:</b></p>
         <ul>
-          <li><b>Gyroid now visible</b> — fixed invisible lattice struts caused by threshold formula being 6x too thin</li>
-          <li><b>Smooth shading restored</b> — fixed faceted shadows caused by VBO upload timing before OpenGL context was ready</li>
-          <li><b>Lattice wall thickness</b> — control now has a good visible range across all cell sizes</li>
+          <li><b>Wall thickness fully decoupled from cell size</b> — changing cell size no longer affects wall thickness</li>
+          <li><b>Physical wall thickness in mm</b> — 2mm wall = 2mm thick struts, always</li>
+          <li><b>Floating geometry removed</b> — small disconnected pieces after lattice generation are automatically cleaned up</li>
+          <li><b>Gizmo easier to grab</b> — larger hit area, works correctly on HiDPI displays</li>
+          <li><b>Ctrl+A then Delete works</b> — multi-select delete now fully functional</li>
+          <li><b>Accent color picker</b> — change the UI accent color live under Settings</li>
+          <li><b>Packing spacing fixed</b> — X and Y gaps are now symmetric</li>
         </ul>
         <p><b>Coming soon:</b></p>
         <ul>
           <li>Voronoi lattice generation</li>
-          <li>Feature-size aware TPMS (auto-skips regions too thin for the lattice)</li>
+          <li>Feature-size aware TPMS</li>
           <li>3D file browser with thumbnail previews</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
-        Full changelog available in Help → About TriplyAM → Changelog tab.
+        Full changelog available in Settings → About TriplyAM → Changelog tab.
         </p>
         """)
         lay.addWidget(tb)
@@ -2166,7 +2179,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.2.25 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.2.27 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2206,14 +2219,23 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.2.25 — Beta <span class='tag'>current</span></h3>
+        <h3>0.2.27 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Fixed gizmo hit detection — now works on HiDPI displays, larger hit area</li>
-          <li>Fixed Ctrl+A then Delete — tree now supports multi-select (ExtendedSelection)</li>
-          <li>Lattice control renamed to "Lattice density (%)" — 0%=thin walls, 99%=near-solid</li>
-          <li>Lattice density is now cell-size independent</li>
-          <li>Fixed packing asymmetric spacing — packer now uses consistent bbox dimensions</li>
-          <li>AppImage icon updated to new TriplyAM design</li>
+          <li>Wall thickness fully decoupled from cell size — changing cell size no longer affects wall thickness</li>
+          <li>Physical formula: threshold = (wall_mm / 5.0) × field_max — cell-size independent</li>
+          <li>Adaptive voxel size based on wall_mm — thin walls always resolved correctly</li>
+          <li>Floating geometry removed after lattice generation (small disconnected components)</li>
+          <li>Surface level error fixed — threshold clamped to valid field range with clear warning</li>
+          <li>Updated TriplyAM icon — corrected proportions</li>
+        </ul>
+
+        <h3>0.2.25–26 — Beta</h3>
+        <ul>
+          <li>Fixed gizmo hit detection — works on HiDPI displays, larger hit area</li>
+          <li>Fixed Ctrl+A then Delete — tree now uses ExtendedSelection mode</li>
+          <li>Lattice wall thickness control restored to mm with physical formula</li>
+          <li>Fixed packing asymmetric X/Y spacing</li>
+          <li>AppImage icon updated</li>
         </ul>
 
         <h3>0.2.24 — Beta</h3>

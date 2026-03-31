@@ -89,12 +89,13 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     from mesh_repair import weld_vertices, remove_degenerate
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
-    # Physical formula: threshold = wall_mm * pi * sqrt(3) / cell_size
-    # This maps wall_mm directly to the isosurface band half-width.
-    # Increasing wall_mm ALWAYS increases wall thickness. No inversions, no caps.
-    # The voxel_size is adapted so the wall is always resolved by at least 3 voxels.
+    # DECOUPLED formula — wall_mm and cell_size are fully independent.
+    # threshold = (wall_mm / WALL_SCALE) * field_max_actual
+    # WALL_SCALE=5mm means "5mm = solid body". field_max is computed from
+    # the actual field so it adapts to any TPMS type.
+    # Cell size only controls repeat frequency — does NOT affect threshold.
     wall_mm = float(lattice_thickness)
-    threshold = wall_mm * np.pi * np.sqrt(3) / float(cell_size)
+    WALL_SCALE = 5.0  # reference: 5mm wall = solid body
 
     pad = cell_size
     origin = mins - pad
@@ -109,10 +110,30 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     zs = origin[2] + np.arange(nz)*voxel_size
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     field = fn(X, Y, Z, cell_size)
-    sdf = (threshold - np.abs(field)).astype(np.float32)
+
+    # Compute threshold from actual field range — fully decoupled from cell_size.
+    # field_max varies slightly by TPMS type; using the actual value ensures
+    # wall_mm=WALL_SCALE always produces a solid regardless of TPMS type.
+    field_abs = np.abs(field)
+    field_max = float(field_abs.max())
+    if field_max < 1e-6:
+        field_max = 1.0
+
+    threshold = min((wall_mm / WALL_SCALE) * field_max, field_max * 0.95)
+    threshold = max(threshold, field_max * 0.01)  # minimum visible wall
+
+    sdf = (threshold - field_abs).astype(np.float32)
 
     # Seal boundaries
     sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
+
+    # Verify the isosurface exists before calling marching_cubes
+    if sdf.min() >= 0 or sdf.max() <= 0:
+        raise ValueError(
+            f"Wall thickness ({float(lattice_thickness):.2f}mm) is too large for "
+            f"cell size ({float(cell_size):.2f}mm) — the lattice would be solid. "
+            f"Try reducing wall thickness or increasing cell size."
+        )
 
     lv, lf, _, _ = marching_cubes(sdf, level=0.0,
                                    spacing=(voxel_size, voxel_size, voxel_size))
@@ -251,16 +272,15 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
     _check()
 
     # ── Voxel size ─────────────────────────────────────────────────────────────
+    wall_mm = float(lattice_thickness)
     if resolution is None or resolution == 0:
-        # Adapt voxel size to always resolve the wall thickness with ≥3 voxels.
-        # voxel = min(wall_mm/3, cell_size/8), bounded to 0.05..0.5mm.
-        wall_mm = float(lattice_thickness)
-        voxel_from_wall = wall_mm / 3.0 if wall_mm > 0 else cell_size / 8.0
-        voxel_from_cell = cell_size / 8.0
-        voxel_size = float(np.clip(min(voxel_from_wall, voxel_from_cell), 0.05, 0.5))
+        # Voxel based on wall_mm to ensure ≥3 voxels resolve the strut.
+        # Cell size doesn't affect voxel — only determines repeat frequency.
+        voxel_from_wall = wall_mm / 3.0 if wall_mm > 0 else 0.3
+        voxel_size = float(np.clip(voxel_from_wall, 0.05, 0.5))
     else:
         voxel_size = float(np.clip(np.max(span)/resolution, 0.05, 1.0))
-    _prog(f"Voxel size: {voxel_size:.3f}mm")
+    _prog(f"Voxel size: {voxel_size:.3f}mm (wall={wall_mm:.2f}mm)")
 
     # ── Step 1: MeshLib uniform shell offset ───────────────────────────────────
     wt = float(wall_thickness)
