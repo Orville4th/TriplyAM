@@ -10,3 +10,4 @@ manifold3d
 cadquery
 pyvista
 pymeshfix
+scipy
