@@ -86,28 +86,30 @@ class ExportWorker(QThread):
     finished = pyqtSignal()
     error    = pyqtSignal(str)
 
-    def __init__(self, path, vertices, faces, quality):
+    def __init__(self, path, vertices, faces, quality, agreed_to_terms=True):
         super().__init__()
         self.path=path; self.vertices=vertices
         self.faces=faces; self.quality=quality
+        self.agreed_to_terms=agreed_to_terms
 
     def run(self):
         try:
             import os
             ext=os.path.splitext(self.path)[1].lower()
             self.progress.emit("Preparing mesh...", 10)
-            if ext=='.stl':
-                self.progress.emit("Writing STL...", 40)
-                from triply_io.exporter import export_stl
-                export_stl(self.path, self.vertices, self.faces)
-            elif ext=='.3mf':
+            if ext=='.3mf':
                 self.progress.emit("Writing 3MF...", 40)
                 from triply_io.exporter import export_3mf
-                export_3mf(self.path, self.vertices, self.faces)
+                export_3mf(self.path, self.vertices, self.faces,
+                           agreed_to_terms=self.agreed_to_terms)
             elif ext in ('.step','.stp'):
                 self.progress.emit("Writing STEP (slow for large meshes)...", 20)
                 from triply_io.exporter import export_step
-                export_step(self.path, self.vertices, self.faces, self.quality)
+                export_step(self.path, self.vertices, self.faces, self.quality,
+                            agreed_to_terms=self.agreed_to_terms)
+            else:
+                self.error.emit(f"Unsupported format: {ext}. Please export as 3MF or STEP.")
+                return
             self.progress.emit("Done!", 100)
             self.finished.emit()
         except Exception as e:
@@ -251,6 +253,7 @@ class TripLyWindow(QMainWindow):
         self._redo_stack = []
         self._last_import_dir = self._cfg.get("last_import_dir", os.path.expanduser("~"))
         self._last_export_dir = self._cfg.get("last_export_dir", os.path.expanduser("~"))
+        self._agreed_to_terms = False  # Set True after startup disclaimer is accepted
 
         self.setStyleSheet(APP_STYLESHEET)
         self._build_ui()
@@ -446,7 +449,7 @@ class TripLyWindow(QMainWindow):
                         ("Copy",self._copy_sel),("Paste",self._paste)]:
             b = QPushButton(txt); b.clicked.connect(fn); r.addWidget(b)
         lay.addLayout(r)
-        b = QPushButton("Export Selected as STL"); b.clicked.connect(self._export_sel_stl)
+        b = QPushButton("Export Selected as 3MF"); b.clicked.connect(self._export_sel_stl)
         lay.addWidget(b)
         lay.addStretch(); return w
 
@@ -1705,14 +1708,13 @@ class TripLyWindow(QMainWindow):
     def _save_path(self, default_name):
         base=os.path.splitext(default_name)[0]
         path,_ = QFileDialog.getSaveFileName(
-            self, "Export", os.path.join(self._last_export_dir, base),
-            "STL (*.stl);;3MF (*.3mf);;STEP (*.step)",
+            self, "Export", os.path.join(self._last_export_dir, base + ".3mf"),
+            "3MF (*.3mf);;STEP (*.step)",
             options=QFileDialog.Option.DontUseNativeDialog
         )
         if not path: return None
-        # Auto-add extension
         if not os.path.splitext(path)[1]:
-            path += '.stl'
+            path += '.3mf'
         d=os.path.dirname(os.path.abspath(path))
         self._last_export_dir=d; self._cfg["last_export_dir"]=d; save_config(self._cfg)
         return path
@@ -1725,7 +1727,8 @@ class TripLyWindow(QMainWindow):
             self.exp_prog.setVisible(True); self.exp_prog.setValue(0)
         if hasattr(self,'exp_status'):
             self.exp_status.setVisible(True); self.exp_status.setText("Starting export...")
-        self._exp_worker=ExportWorker(path,verts,faces,quality)
+        self._exp_worker=ExportWorker(path,verts,faces,quality,
+                                       agreed_to_terms=getattr(self,'_agreed_to_terms',True))
         def on_prog(msg,pct):
             if hasattr(self,'exp_status'): self.exp_status.setText(msg)
             if hasattr(self,'exp_prog'): self.exp_prog.setValue(pct)
@@ -1765,16 +1768,17 @@ class TripLyWindow(QMainWindow):
         if not p: return
         base=os.path.splitext(p['name'])[0]
         path,_=QFileDialog.getSaveFileName(
-            self,"Export STL",os.path.join(self._last_export_dir,base+".stl"),
-            "STL (*.stl)",
+            self,"Export 3MF",os.path.join(self._last_export_dir,base+".3mf"),
+            "3MF (*.3mf)",
             options=QFileDialog.Option.DontUseNativeDialog
         )
         if not path: return
-        if not path.lower().endswith('.stl'): path+='.stl'
+        if not path.lower().endswith('.3mf'): path+='.3mf'
         d=os.path.dirname(os.path.abspath(path))
         self._last_export_dir=d; self._cfg["last_export_dir"]=d; save_config(self._cfg)
-        from triply_io.exporter import export_stl
-        export_stl(path,p['verts'],p['faces'])
+        from triply_io.exporter import export_3mf
+        export_3mf(path,p['verts'],p['faces'],
+                   agreed_to_terms=getattr(self,'_agreed_to_terms',True))
         self.status.showMessage(f"Exported: {path}")
 
     def _export_all(self):
@@ -1783,20 +1787,23 @@ class TripLyWindow(QMainWindow):
             options=QFileDialog.Option.DontUseNativeDialog)
         if not folder: return
         self._last_export_dir=folder; self._cfg["last_export_dir"]=folder; save_config(self._cfg)
-        from triply_io.exporter import export_stl
+        from triply_io.exporter import export_3mf
         for p in self._parts.values():
-            export_stl(os.path.join(folder,p['name']+'.stl'),p['verts'],p['faces'])
-        self.status.showMessage(f"Exported {len(self._parts)} parts.")
+            export_3mf(os.path.join(folder,p['name']+'.3mf'),p['verts'],p['faces'],
+                       agreed_to_terms=getattr(self,'_agreed_to_terms',True))
+        self.status.showMessage(f"Exported {len(self._parts)} parts as 3MF.")
 
     def _export_packed(self):
         if not self._parts: return
-        path=self._save_path("packed_scene.stl")
+        path=self._save_path("packed_scene")
         if not path: return
-        from triply_io.exporter import export_stl
+        from triply_io.exporter import export_3mf
         all_v,all_f,off=[],[],0
         for p in self._parts.values():
             v=p['verts']+p['offset']; all_v.append(v); all_f.append(p['faces']+off); off+=len(v)
-        export_stl(path,np.vstack(all_v),np.vstack(all_f))
+        export_3mf(path,np.vstack(all_v),np.vstack(all_f),
+                   name="TriplyAM Packed Scene",
+                   agreed_to_terms=getattr(self,'_agreed_to_terms',True))
 
     # ------------------------------------------------------------------
     # Project
@@ -1868,6 +1875,120 @@ class TripLyWindow(QMainWindow):
             orbit=m.get(self._cfg.get("mouse_orbit","Right Button"),Qt.MouseButton.RightButton),
             pan=m.get(self._cfg.get("mouse_pan","Middle Button"),Qt.MouseButton.MiddleButton),
         )
+
+    def _show_disclaimer(self):
+        """Show startup terms dialog. Returns True if user agrees, False to quit."""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, QLabel, QCheckBox
+        from PyQt6.QtGui import QPixmap
+        from PyQt6.QtCore import Qt
+        import os as _os
+
+        # Check if already agreed in this config
+        if self._cfg.get("terms_agreed_version") == "0.2.0":
+            self._agreed_to_terms = True
+            return True
+
+        dlg = QDialog()
+        dlg.setWindowTitle("TriplyAM — Terms of Use")
+        dlg.setMinimumWidth(560)
+        dlg.setMinimumHeight(520)
+        dlg.setWindowFlags(Qt.WindowType.Dialog)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(12)
+
+        # Header
+        hdr_row = QHBoxLayout()
+        _icon_paths = [
+            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '..', 'triplyam_icon.png'),
+            _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'triplyam_icon.png'),
+        ]
+        _here = _os.environ.get('APPDIR', '')
+        if _here:
+            _icon_paths.insert(0, _os.path.join(_here, 'triplyam.png'))
+        icon_lbl = QLabel()
+        for _p in _icon_paths:
+            if _os.path.exists(_p):
+                pix = QPixmap(_p).scaled(64, 64, Qt.AspectRatioMode.KeepAspectRatio,
+                                         Qt.TransformationMode.SmoothTransformation)
+                icon_lbl.setPixmap(pix)
+                break
+        icon_lbl.setFixedSize(72, 72)
+        hdr_row.addWidget(icon_lbl)
+        hdr_lbl = QLabel(
+            "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.0 Beta</span>"
+        )
+        hdr_lbl.setWordWrap(True)
+        hdr_row.addWidget(hdr_lbl, 1)
+        lay.addLayout(hdr_row)
+
+        # Terms text
+        tb = QTextBrowser()
+        tb.setOpenExternalLinks(True)
+        tb.setHtml("""
+        <p><b>Please read and accept the following before using TriplyAM.</b></p>
+
+        <p><b>1. No Warranty</b><br>
+        TriplyAM is provided as open-source software, free of charge, with no warranty of any kind,
+        express or implied. The authors and contributors make no representations about the suitability
+        of this software or the geometry it generates for any purpose.</p>
+
+        <p><b>2. No Structural Validation</b><br>
+        Parts generated by TriplyAM have <b>not</b> been FEA-simulated, structurally analysed,
+        or certified for any application. Lattice and TPMS geometries may contain voids,
+        thin walls, or non-manifold regions. <b>Never use TriplyAM-generated parts in
+        safety-critical applications without independent engineering review and physical testing.</b></p>
+
+        <p><b>3. Use at Your Own Risk</b><br>
+        You assume full responsibility for testing, validating, and safely using any geometry
+        produced by this software. The authors accept no liability for damage, injury, or loss
+        arising from the use of TriplyAM or parts generated by it.</p>
+
+        <p><b>4. Open Source License</b><br>
+        TriplyAM is open-source software. Source code is available at
+        <a href='https://github.com/Orville4th/TriplyAM'>github.com/Orville4th/TriplyAM</a>.
+        You may use, modify, and distribute it in accordance with its license terms.</p>
+
+        <p><b>5. Export Metadata</b><br>
+        All files exported from TriplyAM contain embedded metadata including the software name,
+        version, export date, and a record that these terms were accepted. This information
+        remains part of the exported file.</p>
+
+        <p style='color:#888; font-size:11px;'>
+        This is not a substitute for legal advice. By clicking "I Agree", you acknowledge
+        that you have read, understood, and accepted these terms.
+        </p>
+        """)
+        lay.addWidget(tb)
+
+        # Checkbox
+        chk = QCheckBox("I have read and agree to the terms above")
+        chk.setStyleSheet("font-weight: 500; padding: 4px;")
+        lay.addWidget(chk)
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_agree  = QPushButton("I Agree — Launch TriplyAM")
+        btn_decline = QPushButton("Decline — Exit")
+        btn_agree.setEnabled(False)
+        btn_agree.setStyleSheet("padding: 8px 20px; font-weight: 500;")
+        btn_decline.setStyleSheet("padding: 8px 20px;")
+        btn_row.addWidget(btn_decline)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_agree)
+        lay.addLayout(btn_row)
+
+        chk.toggled.connect(btn_agree.setEnabled)
+        btn_agree.clicked.connect(dlg.accept)
+        btn_decline.clicked.connect(dlg.reject)
+
+        result = dlg.exec()
+        if result == QDialog.DialogCode.Accepted and chk.isChecked():
+            self._agreed_to_terms = True
+            self._cfg["terms_agreed_version"] = "0.2.0"
+            save_config(self._cfg)
+            return True
+        return False
 
     def _dlg_about(self):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTabWidget, QTextBrowser, QDialogButtonBox, QLabel
@@ -2049,7 +2170,11 @@ def main():
             app.setWindowIcon(QIcon(_p))
             break
 
-    win=TripLyWindow(); win.show(); sys.exit(app.exec())
+    win=TripLyWindow()
+    if not win._show_disclaimer():
+        sys.exit(0)
+    win.show()
+    sys.exit(app.exec())
 
 if __name__=="__main__":
     import traceback, os as _os
