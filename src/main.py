@@ -2062,11 +2062,48 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>v0.2.0 — Beta 17 <span class='tag'>current</span></h3>
+        <h3>v0.2.0 — Beta 22 <span class='tag'>current</span></h3>
+        <ul>
+          <li>Fixed missing export_stl in lattice pipeline — gyroid generation in cylinders and other shapes now works correctly</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 21</h3>
+        <ul>
+          <li>Startup terms and disclaimer screen — must agree to use the app</li>
+          <li>3MF is now the default and only user export format (STL removed)</li>
+          <li>All 3MF exports embed metadata: generator, version, export date, terms agreed, structural warning</li>
+          <li>STEP export retains metadata in file header</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 20</h3>
+        <ul>
+          <li>App icon now appears in taskbar, title bar, and About screen</li>
+          <li>Fixed build script to use real triplyam_icon.png instead of generated placeholder</li>
+          <li>APPDIR exported in AppRun so icon is found at runtime inside AppImage</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 19</h3>
+        <ul>
+          <li>Fixed lattice wall thickness range — now spans full 0 to cell_size - 0.01</li>
+          <li>Lattice wall max dynamically updates when cell size changes</li>
+          <li>Label renamed to "Lattice wall thickness:" with a note explaining the cell size limit</li>
+          <li>Threshold formula rewritten as linear mapping — full range now usable</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 18</h3>
         <ul>
           <li>Fixed multi-select delete — Ctrl+A then Delete now removes all parts</li>
           <li>Fixed lattice wall thickness control — strut width now independent of cell size</li>
           <li>Cell size now correctly controls cell period only, not strut thickness</li>
+          <li>Changelog added to About screen</li>
+          <li>TriplyAM icon added to About screen header</li>
+        </ul>
+
+        <h3>v0.2.0 — Beta 17</h3>
+        <ul>
+          <li>App renamed from Triply to TriplyAM everywhere</li>
+          <li>New TriplyAM icon — lattice-T logo on grey-blue background</li>
+          <li>VBO (Vertex Buffer Object) GPU rendering — major performance improvement for dense meshes</li>
         </ul>
 
         <h3>v0.2.0 — Beta 16</h3>

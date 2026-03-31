@@ -21,6 +21,25 @@ QUALITY_PRESETS = {
 }
 
 
+def export_stl(path, vertices, faces):
+    """Internal STL writer — used by lattice pipeline (MeshLib temp files).
+    NOT a user-facing export. Use export_3mf() for user exports."""
+    import struct as _struct
+    v = vertices.astype(np.float32)
+    with open(path, 'wb') as f:
+        f.write(b'\x00' * 80)
+        f.write(_struct.pack('<I', len(faces)))
+        for tri in faces:
+            v0, v1, v2 = v[tri[0]], v[tri[1]], v[tri[2]]
+            e1 = v1 - v0; e2 = v2 - v0
+            n = np.cross(e1, e2)
+            nl = np.linalg.norm(n)
+            n = n / nl if nl > 1e-10 else np.array([0,0,1], dtype=np.float32)
+            f.write(n.astype(np.float32).tobytes())
+            f.write(v0.tobytes()); f.write(v1.tobytes()); f.write(v2.tobytes())
+            f.write(b'\x00\x00')
+
+
 def _build_metadata(agreed_to_terms=True):
     """Return standard metadata dict embedded in every export."""
     return {
