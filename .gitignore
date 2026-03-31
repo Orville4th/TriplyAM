@@ -13,3 +13,4 @@ AppDir_simple/
 *.3mf
 Repair/
 fix*.py
+config.json
