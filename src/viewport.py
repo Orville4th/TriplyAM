@@ -653,7 +653,11 @@ class Viewport3D(QOpenGLWidget):
         tips={'X':np.array([cx+sz,cy,cz]),'Y':np.array([cx,cy+sz,cz]),'Z':np.array([cx,cy,cz+sz])}
         c_s=self._world_to_screen(cx,cy,cz)
         if c_s is None: return None
-        THRESHOLD=14
+        # Scale logical pixel coords to physical pixels (HiDPI fix)
+        dpr = self.devicePixelRatio()
+        screen_x = screen_x * dpr
+        screen_y = screen_y * dpr
+        THRESHOLD=24 * dpr  # Larger hit area for easier grabbing
         for axis,tip in tips.items():
             tip_s=self._world_to_screen(*tip)
             if tip_s is None: continue

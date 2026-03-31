@@ -89,14 +89,14 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     from mesh_repair import weld_vertices, remove_degenerate
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
-    # Threshold formula: (wall_mm / cell_mm) * K, capped at 0.9.
-    # K=1.8 gives cell-independent visual appearance — the same ratio always
-    # produces the same relative strut thickness regardless of cell size.
-    # Physical note: a 2mm wall in a 5mm cell looks "thicker" than a 2mm wall
-    # in a 15mm cell because it occupies a larger fraction — this is correct behavior.
-    # The UI default is 2.0mm which gives a clearly visible strut at typical cell sizes.
-    t_frac = float(lattice_thickness) / float(cell_size)
-    threshold = min(t_frac * 1.8, 0.9)
+    # lattice_thickness is now a DENSITY PERCENTAGE (0-99).
+    # threshold = density% / 100 * 0.9
+    # 0% = thin walls (small threshold = narrow solid band near field=0)
+    # 50% = medium walls
+    # 99% = near-solid (threshold=0.891, almost everything is solid)
+    # This is cell-size independent and directly intuitive.
+    density_pct = float(lattice_thickness)  # 0-99 range from UI
+    threshold = (density_pct / 100.0) * 0.9
 
     pad = cell_size
     origin = mins - pad

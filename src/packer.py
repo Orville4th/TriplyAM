@@ -85,7 +85,9 @@ def pack_parts(parts,bv_x,bv_y,bv_z,part_gap=2.0,wall_offset=5.0,
     items=[]
     for p in parts:
         v=p['verts']
-        dx,dy,dz=_get_dims_exact(v) if exact else _get_dims_bbox(v)
+        # Always use bbox for packing dims — SVD can swap X/Y axes causing
+        # asymmetric spacing. Bbox is simpler and more predictable.
+        dx,dy,dz=_get_dims_bbox(v)
         for i in range(p.get('instances',1)):
             label=f"{p['name']} #{i+1}" if p.get('instances',1)>1 else p['name']
             items.append((label,dx,dy,dz,p))

@@ -445,6 +445,7 @@ class TripLyWindow(QMainWindow):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.setMinimumHeight(260)
+        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._tree_ctx)
         self.tree.currentItemChanged.connect(self._on_tree_sel)
@@ -620,27 +621,20 @@ class TripLyWindow(QMainWindow):
         self.sp_wall  = StepSpin(0.0,20.0,1.5,0.1)
         self.sp_cell  = StepSpin(2.0,50.0,8.0,0.5)
         # Max lattice wall = cell_size - 0.01 (enforced dynamically)
-        self.sp_latt  = StepSpin(0.1, self.sp_cell.value()-0.01, 2.0, 0.1)
+        self.sp_latt  = StepSpin(1, 99, 35, 1, suffix="%")
         self.sp_res = StepSpin(0, 240, 0, 32)
         self.sp_res.spin.setSpecialValueText("Auto")
         pf.addRow("Outer wall (0=none):", self.sp_wall)
         pf.addRow("Cell size:",           self.sp_cell)
-        pf.addRow("Lattice wall thickness:", self.sp_latt)
+        pf.addRow("Lattice density (%):", self.sp_latt)
         pf.addRow("Resolution:",          self.sp_res)
         lay.addLayout(pf)
         # Note under lattice wall thickness
-        latt_note = QLabel("Wall thickness cannot equal Cell size. Larger cells need larger wall values to look the same.")
+        latt_note = QLabel("0% = thin walls / large voids. 99% = near-solid. Independent of cell size.")
         latt_note.setStyleSheet("color:#888; font-size:10px; padding-left:2px;")
         latt_note.setWordWrap(True)
         lay.addWidget(latt_note)
-        # Dynamically update lattice wall max when cell size changes
-        def _update_latt_max(cell_val):
-            new_max = round(cell_val - 0.01, 2)
-            cur = self.sp_latt.value()
-            self.sp_latt.spin.setRange(0.01, new_max)
-            if cur > new_max:
-                self.sp_latt.spin.setValue(new_max)
-        self.sp_cell.valueChanged.connect(_update_latt_max)
+        # No coupling needed — density% is independent of cell size
         self.chk_no_shell = QCheckBox("Lattice only (no outer shell)")
         self.chk_no_shell.toggled.connect(lambda v: self.sp_wall.setEnabled(not v))
         lay.addWidget(self.chk_no_shell)
@@ -1127,8 +1121,12 @@ class TripLyWindow(QMainWindow):
         for p in self._parts.values():
             if p.get('parent') is None:
                 self.viewport.set_mesh_color(p['mesh_idx'], ACCENT_RGB)
-        self.tree.selectAll()
-        self.status.showMessage(f"Selected all {len(self._parts)} parts")
+        # Select all top-level items (parts only, not __lattice__ children)
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            if item:
+                item.setSelected(True)
+        self.status.showMessage(f"Selected all {len(self._parts)} parts — press Delete to remove")
         self._update_props()
 
     def _copy_sel(self):
@@ -1980,7 +1978,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.2.24":
+        if self._cfg.get("terms_agreed_version") == "0.2.25":
             self._agreed_to_terms = True
             return True
 
@@ -2012,7 +2010,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.24 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.2.25 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2082,17 +2080,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.2.24"
+            self._cfg["terms_agreed_version"] = "0.2.25"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.2.24":
+        if self._cfg.get("whats_new_shown_version") == "0.2.25":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.2.24"
+        self._cfg["whats_new_shown_version"] = "0.2.25"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2100,13 +2098,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM beta-23")
+        dlg.setWindowTitle("What's new in TriplyAM 0.2.25")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in beta-23</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.2.25</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2168,7 +2166,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.2.24 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.2.25 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2208,19 +2206,27 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.2.24 — Beta <span class='tag'>current</span></h3>
+        <h3>0.2.25 — Beta <span class='tag'>current</span></h3>
+        <ul>
+          <li>Fixed gizmo hit detection — now works on HiDPI displays, larger hit area</li>
+          <li>Fixed Ctrl+A then Delete — tree now supports multi-select (ExtendedSelection)</li>
+          <li>Lattice control renamed to "Lattice density (%)" — 0%=thin walls, 99%=near-solid</li>
+          <li>Lattice density is now cell-size independent</li>
+          <li>Fixed packing asymmetric spacing — packer now uses consistent bbox dimensions</li>
+          <li>AppImage icon updated to new TriplyAM design</li>
+        </ul>
+
+        <h3>0.2.24 — Beta</h3>
         <ul>
           <li>Popups now always appear on the same screen as the main window</li>
           <li>App remembers which screen it was last used on</li>
           <li>Fixed: can now delete parts that have had TPMS applied</li>
-          <li>Fixed: gizmo now activates correctly after lattice is applied</li>
           <li>Settings menu items no longer show "..." truncation</li>
           <li>What's new popup only shows once per version</li>
           <li>PC hostname and IP embedded in 3MF export metadata</li>
-          <li>UI Scale option removed (caused confusion) — replaced with Accent Color</li>
-          <li>Accent Color picker — change the red to blue, purple, green etc. live with no restart</li>
+          <li>UI Scale replaced with Accent Color picker — change accent color live</li>
           <li>Left sidebar narrower</li>
-          <li>Version numbering updated to 0.2.24 format</li>
+          <li>Version numbering updated to 0.2.x format</li>
         </ul>
 
         <h3>0.2.23 — Beta</h3>
