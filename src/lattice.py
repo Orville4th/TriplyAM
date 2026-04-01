@@ -207,7 +207,7 @@ def _cylinder_mesh(p0, p1, radius, segments=8):
     for i in range(segments):
         j = (i+1) % segments
         faces += [[i, j, segments+j], [i, segments+j, segments+i]]
-        faces += [[c0, i, j], [c1, segments+j, segments+i]]
+        faces += [[c0, j, i], [c1, segments+i, segments+j]]
 
     return verts, np.array(faces, dtype=np.int32)
 
