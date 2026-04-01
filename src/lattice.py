@@ -2,7 +2,7 @@
 lattice.py — Triply V3 TPMS + Voronoi lattice generation
 Hybrid pipeline:
   - MeshLib mcOffsetMesh → perfect uniform wall thickness
-  - manifold3d → boolean operations (handles strut topology correctly)
+  - manifold3d → boolean operations
   - scikit-image marching cubes → TPMS mesh generation
   - scipy.spatial.Voronoi + cKDTree → Voronoi strut network
 """
@@ -32,13 +32,13 @@ def _schoen_iwp(x, y, z, L):
            -(np.cos(2*t*x)+np.cos(2*t*y)+np.cos(2*t*z)))
 
 LATTICE_FNS = {
-    "Gyroid":     _gyroid,
-    "Schwarz P":  _schwarz_p,
-    "Schwarz D":  _schwarz_d,
+    "Gyroid":      _gyroid,
+    "Schwarz P":   _schwarz_p,
+    "Schwarz D":   _schwarz_d,
     "Schoen I-WP": _schoen_iwp,
 }
 TPMS_NAMES    = list(LATTICE_FNS.keys())
-VORONOI_NAMES = ["Voronoi (Shell-on)", "Voronoi (Shell-off)"]
+VORONOI_NAMES = ["Voronoi"]
 LATTICE_NAMES = TPMS_NAMES + VORONOI_NAMES
 
 
@@ -57,7 +57,7 @@ def _to_mr(verts, faces):
     return mesh
 
 def _from_mr(mesh_mr):
-    """MeshLib mesh → numpy directly (no STL roundtrip)."""
+    """MeshLib mesh → numpy directly."""
     import meshlib.mrmeshpy as mr
     nv = mesh_mr.topology.numValidVerts()
     nf = mesh_mr.topology.numValidFaces()
@@ -83,23 +83,37 @@ def _from_manifold(mfd):
     return (np.array(r.vert_properties, dtype=np.float32),
             np.array(r.tri_verts, dtype=np.int32))
 
+def _manifold_intersect(a, b):
+    """
+    Intersection of two Manifolds — compatible across manifold3d versions.
+    Tries instance method (newer), class method, then ^ operator fallback
+    (^ is intersection in manifold3d, not XOR).
+    """
+    try:
+        from manifold3d import OpType
+        return a.boolean(b, OpType.Intersect)
+    except AttributeError:
+        pass
+    try:
+        from manifold3d import Manifold, OpType
+        return Manifold.boolean(a, b, OpType.Intersect)
+    except (AttributeError, TypeError):
+        pass
+    return a ^ b
+
 
 # ── TPMS mesh builder ──────────────────────────────────────────────────────────
 
-def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
+def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
                      lattice_type, voxel_size, smooth_iterations=0):
     from skimage.measure import marching_cubes
     from mesh_repair import weld_vertices, remove_degenerate
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
-    # DECOUPLED formula — wall_mm and cell_size are fully independent.
-    # threshold = (wall_mm / WALL_SCALE) * field_max_actual
-    # WALL_SCALE=5mm means "5mm = solid body". field_max is computed from
-    # the actual field so it adapts to any TPMS type.
-    # Cell size only controls repeat frequency — does NOT affect threshold.
-    wall_mm = float(lattice_thickness)
-    WALL_SCALE = 20.0  # reference: 20mm wall = solid body
-                       # allows wall_mm up to ~19mm for large cells
+
+    # infill_pct 1–99 maps linearly to threshold fraction of field_max.
+    # 40% infill → ~40% solid volume in the gyroid field.
+    infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
 
     pad = cell_size
     origin = mins - pad
@@ -115,40 +129,30 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     field = fn(X, Y, Z, cell_size)
 
-    # Compute threshold — fully decoupled from cell_size.
-    # sdf = |field| - threshold (inverted from naive approach)
-    # sdf > 0 where |field| > threshold = OPEN POCKETS (void)
-    # sdf < 0 where |field| < threshold = GYROID WALL MATERIAL (solid)
-    # marching_cubes extracts sdf=0 surface, enclosing sdf<0 (the walls)
-    # Result: small threshold = thin walls, large threshold = thick walls ✓
     field_abs = np.abs(field)
     field_max = float(field_abs.max())
     if field_max < 1e-6:
         field_max = 1.0
 
-    # Map wall_mm linearly: 0mm -> no walls, WALL_SCALE -> solid
-    # WALL_SCALE is set so the full 0..field_max range is usable
-    threshold = (wall_mm / WALL_SCALE) * field_max
-    threshold = max(threshold, field_max * 0.005)   # minimum — avoid empty mesh
-    threshold = min(threshold, field_max * 0.98)    # maximum — avoid fully solid
+    threshold = infill * field_max
+    threshold = max(threshold, field_max * 0.005)
+    threshold = min(threshold, field_max * 0.98)
 
-    # INVERTED sdf: solid where |field| < threshold (the gyroid shell)
+    # sdf < 0 = solid wall material, sdf > 0 = void
     sdf = (field_abs - threshold).astype(np.float32)
 
-    # Seal boundaries as VOID (negative) so marching cubes doesn't
-    # create a solid shell around the entire volume
+    # Seal boundaries as void
     sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
 
-    # Verify the isosurface exists before calling marching_cubes
     if sdf.min() >= 0:
         raise ValueError(
-            f"Wall thickness ({wall_mm:.2f}mm) is too small — no gyroid walls visible. "
-            f"Try increasing wall thickness above 0.1mm."
+            f"Infill {infill_pct:.0f}% is too low — no lattice walls visible. "
+            f"Try increasing infill above 5%."
         )
     if sdf.max() <= 0:
         raise ValueError(
-            f"Wall thickness ({wall_mm:.2f}mm) is too large — model would be solid. "
-            f"Try reducing wall thickness below {WALL_SCALE*0.95:.1f}mm."
+            f"Infill {infill_pct:.0f}% is too high — model would be solid. "
+            f"Try reducing infill below 95%."
         )
 
     lv, lf, _, _ = marching_cubes(sdf, level=0.0,
@@ -157,14 +161,12 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
     lv, lf = weld_vertices(lv.astype(np.float32), lf.astype(np.int32))
     lf = remove_degenerate(lv, lf)
 
-    # Optional smoothing
     if smooth_iterations > 0:
         import pyvista as pv
         faces_pv = np.hstack([np.full((len(lf),1),3), lf]).astype(np.int32)
         mesh = pv.PolyData(lv, faces_pv)
         mesh = mesh.smooth(n_iter=int(smooth_iterations*20),
-                           relaxation_factor=0.1,
-                           feature_angle=30.0)
+                           relaxation_factor=0.1, feature_angle=30.0)
         lv = np.array(mesh.points, dtype=np.float32)
         lf = mesh.faces.reshape(-1,4)[:,1:].astype(np.int32)
 
@@ -174,20 +176,15 @@ def _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
 # ── Voronoi lattice builder ────────────────────────────────────────────────────
 
 def _cylinder_mesh(p0, p1, radius, segments=8):
-    """
-    Build a capped cylinder mesh between two 3D points.
-    Returns (verts, faces) as numpy arrays.
-    Segments kept low (8) for speed — many cylinders are unioned together.
-    """
+    """Capped cylinder between two 3D points. Low segments for fast boolean union."""
     p0 = np.array(p0, dtype=np.float64)
     p1 = np.array(p1, dtype=np.float64)
     axis = p1 - p0
     length = np.linalg.norm(axis)
     if length < 1e-6:
-        return np.zeros((0, 3), dtype=np.float32), np.zeros((0, 3), dtype=np.int32)
+        return np.zeros((0,3), dtype=np.float32), np.zeros((0,3), dtype=np.int32)
     axis /= length
 
-    # Build two orthogonal vectors to axis
     perp = np.array([1.0, 0.0, 0.0])
     if abs(np.dot(axis, perp)) > 0.9:
         perp = np.array([0.0, 1.0, 0.0])
@@ -195,21 +192,17 @@ def _cylinder_mesh(p0, p1, radius, segments=8):
     v = np.cross(axis, u)
 
     angles = np.linspace(0, 2*np.pi, segments, endpoint=False)
-    ring0 = p0 + radius * (np.outer(np.cos(angles), u) + np.outer(np.sin(angles), v))
-    ring1 = p1 + radius * (np.outer(np.cos(angles), u) + np.outer(np.sin(angles), v))
+    ring0 = p0 + radius*(np.outer(np.cos(angles), u)+np.outer(np.sin(angles), v))
+    ring1 = p1 + radius*(np.outer(np.cos(angles), u)+np.outer(np.sin(angles), v))
 
-    # Vertices: ring0, ring1, cap centres
-    verts = np.vstack([ring0, ring1,
-                       p0[None, :], p1[None, :]]).astype(np.float32)
-    c0, c1 = segments * 2, segments * 2 + 1
+    verts = np.vstack([ring0, ring1, p0[None,:], p1[None,:]]).astype(np.float32)
+    c0, c1 = segments*2, segments*2+1
 
     faces = []
     for i in range(segments):
-        j = (i + 1) % segments
-        # Side quad → 2 triangles
-        faces += [[i, j, segments + j], [i, segments + j, segments + i]]
-        # End caps
-        faces += [[c0, i, j], [c1, segments + j, segments + i]]
+        j = (i+1) % segments
+        faces += [[i, j, segments+j], [i, segments+j, segments+i]]
+        faces += [[c0, i, j], [c1, segments+j, segments+i]]
 
     return verts, np.array(faces, dtype=np.int32)
 
@@ -217,75 +210,78 @@ def _cylinder_mesh(p0, p1, radius, segments=8):
 def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
                         part_manifold, progress_cb=None):
     """
-    Generate a Voronoi strut lattice inside the bounding box [mins, maxs].
+    Voronoi strut lattice clipped to part_manifold.
 
-    Shell-on  (shell_off=False): struts are clipped to the inner cavity —
-              arms naturally touch the shell wall.
-    Shell-off (shell_off=True):  same clip, PLUS boundary nodes are detected,
-              caps are sealed, and each boundary node is connected to the
-              nearest other boundary node(s) (Y-junction if equidistant)
-              forming a closed network — Carbon-style.
+    shell_off=False (Shell-on):  arms reach wall naturally.
+    shell_off=True  (Shell-off): + boundary nodes connected with Y-junctions.
 
-    Uses scipy.spatial.Voronoi for the graph, cKDTree for boundary connections.
-    Each Voronoi edge becomes a cylinder; all cylinders are unioned via manifold3d.
+    Key fix vs 0.3.0: edges are kept when EITHER endpoint is inside the padded
+    bbox, not both — this prevents valid near-boundary edges being discarded.
     """
     from scipy.spatial import Voronoi, cKDTree
-    from manifold3d import Manifold, OpType
 
     def _prog(msg):
         if progress_cb: progress_cb(msg)
 
-    span = maxs - mins
-
-    # ── Seed points — uniform random inside bbox with a border margin ──────────
+    # ── Seed points ────────────────────────────────────────────────────────────
     _prog(f"Voronoi: placing {n_seeds} seed points...")
-    rng = np.random.default_rng(42)  # fixed seed for reproducibility
-    margin = strut_radius * 2
-    seeds = rng.uniform(mins + margin, maxs - margin,
+    rng = np.random.default_rng(42)
+    margin = max(strut_radius * 2, 0.5)
+    safe_mins = mins + margin
+    safe_maxs = maxs - margin
+    for dim in range(3):
+        if safe_mins[dim] >= safe_maxs[dim]:
+            safe_mins[dim] = mins[dim]
+            safe_maxs[dim] = maxs[dim]
+    seeds = rng.uniform(safe_mins, safe_maxs,
                         size=(int(n_seeds), 3)).astype(np.float64)
 
-    # Mirror seeds outside bbox to force finite Voronoi ridges at boundaries
-    # (standard technique to avoid open infinite ridges)
+    # Mirror seeds to force finite ridges at boundaries
     mirrors = []
     for dim in range(3):
-        lo = mins[dim]; hi = maxs[dim]
-        r = seeds.copy(); r[:, dim] = 2*lo - seeds[:, dim]; mirrors.append(r)
-        r = seeds.copy(); r[:, dim] = 2*hi - seeds[:, dim]; mirrors.append(r)
+        lo, hi = mins[dim], maxs[dim]
+        r = seeds.copy(); r[:,dim] = 2*lo - seeds[:,dim]; mirrors.append(r)
+        r = seeds.copy(); r[:,dim] = 2*hi - seeds[:,dim]; mirrors.append(r)
     all_pts = np.vstack([seeds] + mirrors)
 
     _prog("Voronoi: computing diagram...")
     vor = Voronoi(all_pts)
 
-    # ── Collect valid ridge vertex pairs (both finite, inside or near bbox) ────
+    # ── Extract edges ──────────────────────────────────────────────────────────
     _prog("Voronoi: extracting edges...")
-    pad = strut_radius * 3
-    lo = mins - pad; hi = maxs + pad
+    pad = strut_radius * 6   # generous padding
+    lo_pad = mins - pad
+    hi_pad = maxs + pad
 
-    def _in_bounds(pt):
-        return np.all(pt >= lo) and np.all(pt <= hi)
+    def _in_padded(pt):
+        return np.all(pt >= lo_pad) and np.all(pt <= hi_pad)
 
-    edges = []
     vv = vor.vertices
+    edges = []
     for ridge in vor.ridge_vertices:
         if -1 in ridge:
-            continue  # skip infinite ridges
+            continue
         for k in range(len(ridge)):
             a, b = ridge[k], ridge[(k+1) % len(ridge)]
             pa, pb = vv[a], vv[b]
-            if _in_bounds(pa) and _in_bounds(pb):
+            # Keep if EITHER endpoint is inside padded bbox
+            if _in_padded(pa) or _in_padded(pb):
                 edges.append((pa, pb))
 
     if not edges:
-        raise ValueError("Voronoi produced no valid edges — try more seeds or a larger part.")
+        raise ValueError(
+            f"Voronoi produced no valid edges — try more seeds. "
+            f"(bbox: {(maxs-mins).round(1)}, seeds: {n_seeds})"
+        )
 
-    _prog(f"Voronoi: {len(edges)} edges → building {len(edges)} cylinders...")
+    _prog(f"Voronoi: {len(edges)} edges → building cylinders...")
 
-    # ── Build one cylinder per edge, union all via manifold3d ─────────────────
-    # Build in batches to show progress and avoid huge memory spikes
+    # ── Build and union cylinders in batches ───────────────────────────────────
     BATCH = 64
     current_union = None
+    total = len(edges)
 
-    for batch_start in range(0, len(edges), BATCH):
+    for batch_start in range(0, total, BATCH):
         batch = edges[batch_start: batch_start + BATCH]
         batch_manifolds = []
         for p0, p1 in batch:
@@ -302,7 +298,6 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         if not batch_manifolds:
             continue
 
-        # Union this batch together
         batch_union = batch_manifolds[0]
         for m in batch_manifolds[1:]:
             try:
@@ -310,7 +305,6 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
             except Exception:
                 continue
 
-        # Union with running total
         if current_union is None:
             current_union = batch_union
         else:
@@ -319,59 +313,47 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
             except Exception:
                 pass
 
-        pct = min(100, int(batch_start / len(edges) * 70))
+        pct = min(69, int(batch_start / total * 70))
         _prog(f"Voronoi: unioning cylinders... {pct}%")
 
     if current_union is None or current_union.is_empty():
-        raise ValueError("Voronoi cylinder union is empty — try larger strut radius or more seeds.")
+        raise ValueError(
+            "Voronoi cylinder union is empty — try increasing strut diameter or seed count."
+        )
 
-    # ── Shell-off: boundary connections ───────────────────────────────────────
+    # ── Shell-off: Y-junction boundary connections ────────────────────────────
     if shell_off:
         _prog("Voronoi: finding boundary nodes...")
-
-        # A vertex is a boundary node if it's within strut_radius*2 of the bbox face
-        tol = strut_radius * 2.5
+        tol = strut_radius * 3.0
         boundary_nodes = []
         for pt in vv:
-            if not (_in_bounds(pt) and np.all(pt >= mins - tol) and np.all(pt <= maxs + tol)):
+            if not _in_padded(pt):
                 continue
-            on_boundary = False
-            for dim in range(3):
-                if pt[dim] <= mins[dim] + tol or pt[dim] >= maxs[dim] - tol:
-                    on_boundary = True
-                    break
-            if on_boundary:
+            on_face = any(
+                pt[dim] <= mins[dim] + tol or pt[dim] >= maxs[dim] - tol
+                for dim in range(3)
+            )
+            if on_face:
                 boundary_nodes.append(pt)
 
         if len(boundary_nodes) >= 2:
             _prog(f"Voronoi: connecting {len(boundary_nodes)} boundary nodes...")
             bn = np.array(boundary_nodes)
             tree = cKDTree(bn)
-
-            # For each boundary node, find nearest neighbour(s)
-            # k=3 to detect Y-junction (equidistant second neighbour)
-            k = min(3, len(bn))
-            dists, idxs = tree.query(bn, k=k+1)  # +1 because first result is self
-
-            extra_manifolds = []
-            DIST_TOL = strut_radius * 1.5  # tolerance for "equidistant" Y-junction
-
+            k = min(4, len(bn))
+            dists, idxs = tree.query(bn, k=k)
+            YJUNC_TOL = strut_radius * 1.5
+            extra = []
             for i, (row_d, row_i) in enumerate(zip(dists, idxs)):
-                # Skip self (dist~0)
                 neighbours = [(d, j) for d, j in zip(row_d, row_i)
                               if j != i and d > 1e-6]
                 if not neighbours:
                     continue
-
-                # Always connect to nearest
                 d_near = neighbours[0][0]
                 to_connect = [neighbours[0][1]]
-
-                # Y-junction: also connect to any neighbour within DIST_TOL of nearest
                 for d, j in neighbours[1:]:
-                    if d <= d_near + DIST_TOL:
+                    if d <= d_near + YJUNC_TOL:
                         to_connect.append(j)
-
                 for j in to_connect:
                     cv, cf = _cylinder_mesh(bn[i], bn[j], strut_radius, segments=8)
                     if len(cf) == 0:
@@ -379,43 +361,42 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
                     try:
                         m = _to_manifold(cv, cf)
                         if not m.is_empty():
-                            extra_manifolds.append(m)
+                            extra.append(m)
                     except Exception:
                         continue
 
-            if extra_manifolds:
-                _prog(f"Voronoi: unioning {len(extra_manifolds)} boundary connections...")
-                for m in extra_manifolds:
+            if extra:
+                _prog(f"Voronoi: adding {len(extra)} boundary connections...")
+                for m in extra:
                     try:
                         current_union = current_union + m
                     except Exception:
                         continue
 
+    # ── Clip to cavity ────────────────────────────────────────────────────────
     _prog("Voronoi: clipping to part cavity...")
     try:
-        clipped = Manifold.boolean(current_union, part_manifold, OpType.Intersect)
+        clipped = _manifold_intersect(current_union, part_manifold)
     except Exception as e:
         raise ValueError(f"Voronoi clip failed: {e}")
 
     if clipped.is_empty():
-        raise ValueError("Voronoi clipped result is empty — struts may be too thin for part size. Try larger strut radius.")
+        raise ValueError(
+            "Voronoi clipped result is empty — struts may not intersect the part. "
+            "Try a larger strut diameter or more seeds."
+        )
 
     rv, rf = _from_manifold(clipped)
     return rv.astype(np.float32), rf.astype(np.int32)
 
 
-# ── Main pipeline ──────────────────────────────────────────────────────────────
+# ── Small component removal ────────────────────────────────────────────────────
 
 def _remove_small_components(verts, faces, min_fraction=0.01):
-    """
-    Remove disconnected mesh components smaller than min_fraction of the
-    largest component. Eliminates floating geometry artifacts from the
-    lattice boolean operations.
-    """
+    """Remove disconnected fragments smaller than min_fraction of largest component."""
     if len(faces) == 0:
         return verts, faces
 
-    # Build vertex adjacency and flood-fill to find connected components
     from collections import defaultdict, deque
     adj = defaultdict(set)
     for tri in faces:
@@ -425,12 +406,11 @@ def _remove_small_components(verts, faces, min_fraction=0.01):
         adj[c].update([a, b])
 
     visited = np.zeros(len(verts), dtype=bool)
-    components = []  # list of vertex index sets
+    components = []
 
     for start in range(len(verts)):
         if visited[start] or start not in adj:
             continue
-        # BFS
         component = set()
         queue = deque([start])
         while queue:
@@ -447,7 +427,6 @@ def _remove_small_components(verts, faces, min_fraction=0.01):
     if not components:
         return verts, faces
 
-    # Keep only components larger than min_fraction * largest component
     sizes = [len(c) for c in components]
     max_size = max(sizes)
     threshold_size = max(int(max_size * min_fraction), 10)
@@ -457,14 +436,12 @@ def _remove_small_components(verts, faces, min_fraction=0.01):
         if size >= threshold_size:
             keep_verts.update(comp)
 
-    # Rebuild mesh keeping only faces where all 3 vertices are in keep_verts
     keep_faces_mask = np.array([
         int(f[0]) in keep_verts and int(f[1]) in keep_verts and int(f[2]) in keep_verts
         for f in faces
     ])
     new_faces = faces[keep_faces_mask]
 
-    # Remap vertices
     used = np.zeros(len(verts), dtype=bool)
     used[new_faces.ravel()] = True
     old_to_new = np.full(len(verts), -1, dtype=np.int32)
@@ -477,29 +454,21 @@ def _remove_small_components(verts, faces, min_fraction=0.01):
     return new_verts.astype(np.float32), new_faces_remapped.astype(np.int32)
 
 
-def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
+# ── Main pipeline ──────────────────────────────────────────────────────────────
+
+def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
                      stl_faces=None, step_path=None,
                      lattice_type="Gyroid", resolution=None,
                      smooth_iterations=1, smooth_factor=0.3,
-                     wall_only=False, n_seeds=300,
+                     wall_only=False, n_seeds=300, strut_diameter=2.0,
                      progress_cb=None, cancel_flag=None):
     """
     Generate TPMS or Voronoi lattice infill with uniform shell.
 
-    Pipeline (TPMS):
-      1. MeshLib mcOffsetMesh → perfect uniform wall thickness
-      2. manifold3d → shell boolean (part - inner)
-      3. scikit-image marching cubes → TPMS strut mesh
-      4. manifold3d → clip TPMS to inner cavity
-      5. manifold3d → union shell + TPMS
-
-    Pipeline (Voronoi):
-      1. MeshLib mcOffsetMesh → perfect uniform wall thickness
-      2. manifold3d → shell boolean (part - inner)
-      3. scipy Voronoi → strut cylinder mesh
-      4. manifold3d → clip struts to inner cavity
-      5. Shell-off only: boundary node connections (Carbon-style)
-      6. manifold3d → union shell + struts
+    infill_pct    : 1–99%  solid volume fraction (TPMS only)
+    strut_diameter: mm     strut diameter (Voronoi only)
+    wall_only     : no outer shell; for Voronoi also enables shell-off mode
+    n_seeds       : Voronoi seed count
     """
     import meshlib.mrmeshpy as mr
     from mesh_repair import weld_vertices, remove_degenerate
@@ -510,7 +479,9 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
     def _check():
         if cancel_flag and cancel_flag[0]: raise InterruptedError("Cancelled")
 
-    _prog(f"Type: {lattice_type}  Cell: {cell_size}mm  Wall: {wall_thickness}mm")
+    is_voronoi = lattice_type == "Voronoi"
+
+    _prog(f"Type: {lattice_type}  Wall: {wall_thickness}mm")
     _check()
 
     # ── Prepare part mesh ──────────────────────────────────────────────────────
@@ -529,26 +500,24 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
     _prog(f"Part: {len(sf)} faces, span {span.round(1)}")
     _check()
 
-    # ── Voxel size ─────────────────────────────────────────────────────────────
-    wall_mm = float(lattice_thickness)
-    if resolution is None or resolution == 0:
-        # Voxel based on wall_mm to ensure ≥3 voxels resolve the strut.
-        # Cell size doesn't affect voxel — only determines repeat frequency.
-        voxel_from_wall = wall_mm / 3.0 if wall_mm > 0 else 0.3
-        voxel_size = float(np.clip(voxel_from_wall, 0.05, 0.5))
-    else:
-        voxel_size = float(np.clip(np.max(span)/resolution, 0.05, 1.0))
-    _prog(f"Voxel size: {voxel_size:.3f}mm (wall={wall_mm:.2f}mm)")
+    # ── Voxel size (TPMS only) ─────────────────────────────────────────────────
+    if not is_voronoi:
+        if resolution is None or resolution == 0:
+            wall_mm_approx = max((float(infill_pct)/100.0) * min(span) * 0.3, 0.3)
+            voxel_size = float(np.clip(wall_mm_approx / 3.0, 0.05, 0.5))
+        else:
+            voxel_size = float(np.clip(np.max(span)/resolution, 0.05, 1.0))
+        _prog(f"Voxel size: {voxel_size:.3f}mm")
 
-    # ── Step 1: MeshLib uniform shell offset ───────────────────────────────────
+    # ── Step 1: MeshLib shell offset ───────────────────────────────────────────
     wt = float(wall_thickness)
     part_mr = _to_mr(sv, sf)
-    part_m = _to_manifold(sv, sf)
+    part_m  = _to_manifold(sv, sf)
 
     if wt > 0 and not wall_only:
         _prog(f"Computing shell offset ({wt}mm)...")
         op = mr.OffsetParameters()
-        op.voxelSize = min(voxel_size, 0.2)
+        op.voxelSize = min((voxel_size if not is_voronoi else 0.2), 0.2)
         inner_mr = mr.mcOffsetMesh(mr.MeshPart(part_mr), -wt, op)
         iv, ifc = _from_mr(inner_mr)
         _prog(f"Inner cavity: {len(ifc)} faces")
@@ -563,57 +532,49 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, lattice_thickness,
         _prog(f"Shell: {shell_m.num_tri()} tris, vol={shell_m.volume():.0f}")
         _check()
     else:
-        # No shell — TPMS fills entire part volume
         inner_m = part_m
         shell_m = None
 
-    # ── Step 2: Lattice mesh (TPMS or Voronoi) ────────────────────────────────
-    is_voronoi = lattice_type.startswith("Voronoi")
-
+    # ── Step 2: Generate lattice ───────────────────────────────────────────────
     if is_voronoi:
-        shell_off = lattice_type == "Voronoi (Shell-off)"
-        strut_radius = float(lattice_thickness) / 2.0
-        strut_radius = max(strut_radius, 0.1)
-        _prog(f"Generating {lattice_type} (r={strut_radius:.2f}mm, seeds={n_seeds})...")
+        shell_off = bool(wall_only)   # no outer shell → sealed boundary mode
+        strut_radius = max(float(strut_diameter) / 2.0, 0.05)
+        _prog(f"Generating Voronoi (d={strut_diameter:.2f}mm, seeds={n_seeds}, "
+              f"{'shell-off' if shell_off else 'shell-on'})...")
         tv, tf = _build_voronoi_mesh(
-            mins, maxs, strut_radius, int(n_seeds), shell_off,
-            inner_m, progress_cb=_prog
+            mins, maxs, strut_radius, int(n_seeds),
+            shell_off, inner_m, progress_cb=_prog
         )
-        _prog(f"Voronoi struts: {len(tf)} faces")
+        _prog(f"Voronoi: {len(tf)} faces")
         _check()
-        # Voronoi is already clipped to inner_m inside _build_voronoi_mesh
-        inner_tpms_m = _to_manifold(tv, tf)
+        inner_lattice_m = _to_manifold(tv, tf)
+
     else:
-        # ── TPMS path ──────────────────────────────────────────────────────────
-        _prog(f"Generating {lattice_type} TPMS...")
-        tv, tf = _build_tpms_mesh(mins, maxs, cell_size, lattice_thickness,
+        _prog(f"Generating {lattice_type} ({infill_pct:.0f}% infill)...")
+        tv, tf = _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
                                    lattice_type, voxel_size, smooth_iterations)
         _prog(f"TPMS: {len(tf)} faces")
         _check()
 
         tpms_m = _to_manifold(tv, tf)
-
-        # ── Step 3: Clip TPMS to inner cavity ──────────────────────────────────
         _prog("Clipping TPMS to cavity...")
-        from manifold3d import OpType
-        inner_tpms_m = Manifold.boolean(tpms_m, inner_m, OpType.Intersect)
-        _prog(f"Inner TPMS: {inner_tpms_m.num_tri()} tris, vol={inner_tpms_m.volume():.0f}")
+        inner_lattice_m = _manifold_intersect(tpms_m, inner_m)
+        _prog(f"Clipped: {inner_lattice_m.num_tri()} tris")
         _check()
 
-    # ── Step 4: Combine shell + TPMS ──────────────────────────────────────────
-    _prog("Combining shell + TPMS...")
+    # ── Step 3: Combine shell + lattice ───────────────────────────────────────
+    _prog("Combining shell + lattice...")
     if shell_m is not None and not shell_m.is_empty():
-        final_m = shell_m + inner_tpms_m
+        final_m = shell_m + inner_lattice_m
     else:
-        final_m = inner_tpms_m
+        final_m = inner_lattice_m
     _prog(f"Final: {final_m.num_tri()} tris, vol={final_m.volume():.0f}")
     _check()
 
-    # ── Step 5: Extract result ─────────────────────────────────────────────────
+    # ── Step 4: Extract and clean ─────────────────────────────────────────────
     _prog("Extracting mesh...")
     rv, rf = _from_manifold(final_m)
 
-    # ── Step 6: Remove floating geometry (disconnected small components) ───────
     _prog("Removing floating geometry...")
     rv, rf = _remove_small_components(rv, rf)
 
