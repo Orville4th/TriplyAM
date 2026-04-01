@@ -2055,7 +2055,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.3.1":
+        if self._cfg.get("terms_agreed_version") == "0.3.2":
             self._agreed_to_terms = True
             return True
 
@@ -2087,7 +2087,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.1 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.2 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2157,17 +2157,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.3.1"
+            self._cfg["terms_agreed_version"] = "0.3.2"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.3.1":
+        if self._cfg.get("whats_new_shown_version") == "0.3.2":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.3.1"
+        self._cfg["whats_new_shown_version"] = "0.3.2"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2175,13 +2175,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.3.1")
+        dlg.setWindowTitle("What's new in TriplyAM 0.3.2")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.1</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.2</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2189,14 +2189,8 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>Voronoi lattice</b> — organic strut network, available in the lattice type dropdown</li>
-          <li><b>Shell-on / Shell-off</b> — use the "Lattice only" toggle to switch Voronoi modes.
-              Shell-on: arms reach wall naturally. Shell-off: sealed boundary, Y-junction connections (Carbon-style)</li>
-          <li><b>Strut diameter control</b> — set Voronoi strut size in mm directly</li>
-          <li><b>Seed count slider</b> — control Voronoi cell density (50–2000)</li>
-          <li><b>Lattice infill %</b> — TPMS wall control now expressed as % solid volume (e.g. 40% = ~40% solid)</li>
-          <li><b>Fixed TPMS boolean</b> — lattice now correctly clips to cavity</li>
-          <li><b>Fixed accent color persistence</b> — bounding box and parts tree hold saved color on restart</li>
+          <li><b>Voronoi edge fix</b> — fixed empty union error; Voronoi now reliably generates struts</li>
+          <li><b>Lattice infill % direction corrected</b> — high % = more solid, low % = more sparse</li>
         </ul>
         <p><b>Coming soon:</b></p>
         <ul>
@@ -2248,7 +2242,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.3.1 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.3.2 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2288,19 +2282,13 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.3.1 — Beta <span class='tag'>current</span></h3>
+        <h3>0.3.2 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Voronoi lattice — single dropdown entry; shell-on/off driven by "Lattice only" toggle</li>
-          <li>Strut diameter control (mm) — active when Voronoi selected</li>
-          <li>Seed count slider (50–2000) — controls Voronoi cell density</li>
-          <li>Lattice infill % — TPMS density now expressed as % solid volume, cell-size independent</li>
-          <li>Fixed TPMS boolean — lattice correctly clips to cavity (version-safe intersect)</li>
-          <li>Fixed Voronoi empty union — edge filter now keeps ridges where either endpoint is inside bbox</li>
-          <li>Fixed accent color persistence — bounding box and parts tree hold saved color on restart</li>
-          <li>Cell size and Resolution controls auto-hide when Voronoi is selected</li>
+          <li>Fixed Voronoi empty union — ridge iteration now correctly uses ridge_points index filter</li>
+          <li>Fixed lattice infill % direction — high % = more solid, low % = more sparse</li>
         </ul>
 
-        <h3>0.2.28 — Beta</h3>
+        <h3>0.3.1 — Beta</h3>
         <ul>
           <li>Wall thickness fully decoupled from cell size — changing cell size no longer affects wall thickness</li>
           <li>Physical formula: threshold = (wall_mm / 5.0) × field_max — cell-size independent</li>

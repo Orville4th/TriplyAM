@@ -111,9 +111,13 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
 
-    # infill_pct 1–99 maps linearly to threshold fraction of field_max.
-    # 40% infill → ~40% solid volume in the gyroid field.
+    # solid = where |field| < threshold.
+    # TPMS |field| is near zero on the surface, rising outward.
+    # Small threshold → thin surface band → sparse lattice (low infill).
+    # Large threshold → thick band → dense lattice (high infill). ✓
+    # high infill_pct → large threshold → more solid — correct direction.
     infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
+    threshold_frac = infill
 
     pad = cell_size
     origin = mins - pad
@@ -134,7 +138,7 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     if field_max < 1e-6:
         field_max = 1.0
 
-    threshold = infill * field_max
+    threshold = threshold_frac * field_max
     threshold = max(threshold, field_max * 0.005)
     threshold = min(threshold, field_max * 0.98)
 
@@ -248,25 +252,25 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
     vor = Voronoi(all_pts)
 
     # ── Extract edges ──────────────────────────────────────────────────────────
+    # Strategy: keep ridges where BOTH seed points on either side of the ridge
+    # are original seeds (indices 0..n_seeds-1), not mirror copies.
+    # This guarantees the ridge is interior to the original bbox.
+    # ridge_points[i] = [seed_idx_left, seed_idx_right] for ridge i.
+    # ridge_vertices[i] = [vert_idx_a, vert_idx_b] — the two Voronoi vertices.
     _prog("Voronoi: extracting edges...")
-    pad = strut_radius * 6   # generous padding
-    lo_pad = mins - pad
-    hi_pad = maxs + pad
-
-    def _in_padded(pt):
-        return np.all(pt >= lo_pad) and np.all(pt <= hi_pad)
-
+    n_orig = len(seeds)
     vv = vor.vertices
     edges = []
-    for ridge in vor.ridge_vertices:
-        if -1 in ridge:
+
+    for (s0, s1), ridge_verts in zip(vor.ridge_points, vor.ridge_vertices):
+        # Skip infinite ridges
+        if -1 in ridge_verts:
             continue
-        for k in range(len(ridge)):
-            a, b = ridge[k], ridge[(k+1) % len(ridge)]
-            pa, pb = vv[a], vv[b]
-            # Keep if EITHER endpoint is inside padded bbox
-            if _in_padded(pa) or _in_padded(pb):
-                edges.append((pa, pb))
+        # Keep only ridges between two original (non-mirror) seeds
+        if s0 >= n_orig or s1 >= n_orig:
+            continue
+        a, b = ridge_verts[0], ridge_verts[1]
+        edges.append((vv[a], vv[b]))
 
     if not edges:
         raise ValueError(
@@ -325,10 +329,15 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
     if shell_off:
         _prog("Voronoi: finding boundary nodes...")
         tol = strut_radius * 3.0
+        # Only consider Voronoi vertices that are inside or near the bbox
+        lo_loose = mins - tol
+        hi_loose = maxs + tol
         boundary_nodes = []
         for pt in vv:
-            if not _in_padded(pt):
+            # Must be within loose bbox
+            if not (np.all(pt >= lo_loose) and np.all(pt <= hi_loose)):
                 continue
+            # Must be near at least one face
             on_face = any(
                 pt[dim] <= mins[dim] + tol or pt[dim] >= maxs[dim] - tol
                 for dim in range(3)
