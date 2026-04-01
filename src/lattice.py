@@ -8,6 +8,8 @@ Hybrid pipeline:
 """
 
 import numpy as np
+import logging
+_log = logging.getLogger('triplyam')
 
 # ── TPMS functions ─────────────────────────────────────────────────────────────
 
@@ -112,12 +114,11 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
 
     # solid = where |field| < threshold.
-    # TPMS |field| is near zero on the surface, rising outward.
-    # Small threshold → thin surface band → sparse lattice (low infill).
-    # Large threshold → thick band → dense lattice (high infill). ✓
-    # high infill_pct → large threshold → more solid — correct direction.
+    # Confirmed by user: high infill_pct was producing sparse results.
+    # Fix: invert so high % → low threshold_frac → small threshold → more of the
+    # field counts as solid (the gyroid surface band is near field_max, not zero).
     infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
-    threshold_frac = infill
+    threshold_frac = 1.0 - infill  # 70% → threshold=0.30*field_max → dense ✓
 
     pad = cell_size
     origin = mins - pad
@@ -250,29 +251,35 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
 
     _prog("Voronoi: computing diagram...")
     vor = Voronoi(all_pts)
+    _log.debug(f"Voronoi: {len(vor.vertices)} vertices, {len(vor.ridge_vertices)} ridges, "
+               f"{len(seeds)} orig seeds, {len(all_pts)} total pts")
 
     # ── Extract edges ──────────────────────────────────────────────────────────
-    # Strategy: keep ridges where BOTH seed points on either side of the ridge
-    # are original seeds (indices 0..n_seeds-1), not mirror copies.
-    # This guarantees the ridge is interior to the original bbox.
-    # ridge_points[i] = [seed_idx_left, seed_idx_right] for ridge i.
-    # ridge_vertices[i] = [vert_idx_a, vert_idx_b] — the two Voronoi vertices.
+    # Keep ridges where BOTH seed points are original (index < n_orig).
+    # This guarantees the ridge lies inside the original bbox.
     _prog("Voronoi: extracting edges...")
     n_orig = len(seeds)
     vv = vor.vertices
     edges = []
+    skipped_infinite = 0
+    skipped_mirror = 0
 
     for (s0, s1), ridge_verts in zip(vor.ridge_points, vor.ridge_vertices):
-        # Skip infinite ridges
         if -1 in ridge_verts:
+            skipped_infinite += 1
             continue
-        # Keep only ridges between two original (non-mirror) seeds
         if s0 >= n_orig or s1 >= n_orig:
+            skipped_mirror += 1
             continue
         a, b = ridge_verts[0], ridge_verts[1]
         edges.append((vv[a], vv[b]))
 
+    _log.debug(f"Voronoi edges: {len(edges)} kept, "
+               f"{skipped_infinite} infinite skipped, {skipped_mirror} mirror skipped")
+
     if not edges:
+        _log.error(f"Voronoi: no edges found. bbox={maxs-mins}, seeds={n_seeds}, "
+                   f"n_orig={n_orig}, total_ridges={len(vor.ridge_vertices)}")
         raise ValueError(
             f"Voronoi produced no valid edges — try more seeds. "
             f"(bbox: {(maxs-mins).round(1)}, seeds: {n_seeds})"
@@ -284,6 +291,8 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
     BATCH = 64
     current_union = None
     total = len(edges)
+    cyl_ok = 0
+    cyl_fail = 0
 
     for batch_start in range(0, total, BATCH):
         batch = edges[batch_start: batch_start + BATCH]
@@ -291,12 +300,18 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         for p0, p1 in batch:
             cv, cf = _cylinder_mesh(p0, p1, strut_radius, segments=8)
             if len(cf) == 0:
+                cyl_fail += 1
                 continue
             try:
                 m = _to_manifold(cv, cf)
                 if not m.is_empty():
                     batch_manifolds.append(m)
-            except Exception:
+                    cyl_ok += 1
+                else:
+                    cyl_fail += 1
+            except Exception as e:
+                _log.debug(f"Cylinder to_manifold failed: {e}")
+                cyl_fail += 1
                 continue
 
         if not batch_manifolds:
@@ -306,7 +321,8 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         for m in batch_manifolds[1:]:
             try:
                 batch_union = batch_union + m
-            except Exception:
+            except Exception as e:
+                _log.debug(f"Batch union step failed: {e}")
                 continue
 
         if current_union is None:
@@ -314,11 +330,14 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         else:
             try:
                 current_union = current_union + batch_union
-            except Exception:
-                pass
+            except Exception as e:
+                _log.debug(f"Running union step failed: {e}")
 
         pct = min(69, int(batch_start / total * 70))
         _prog(f"Voronoi: unioning cylinders... {pct}%")
+
+    _log.debug(f"Voronoi cylinders: {cyl_ok} ok, {cyl_fail} failed, "
+               f"union_empty={current_union is None or current_union.is_empty()}")
 
     if current_union is None or current_union.is_empty():
         raise ValueError(

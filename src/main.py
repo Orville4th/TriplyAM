@@ -3,8 +3,22 @@ TriplyAM — AM Tools and Lattices
 By Orville Wright IV. All rights reserved.
 """
 
-import sys, os, json, copy, re
+import sys, os, json, copy, re, logging, traceback
 import numpy as np
+
+# ── Debug logger ───────────────────────────────────────────────────────────────
+_LOG_PATH = os.path.join(os.path.expanduser('~'), '.config', 'triply', 'triplyam_debug.log')
+os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler(_LOG_PATH, mode='a', encoding='utf-8'),
+    ]
+)
+log = logging.getLogger('triplyam')
+log.info("=" * 60)
+log.info("TriplyAM starting up")
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter,
@@ -142,7 +156,14 @@ class LatticeWorker(QThread):
 
     def run(self):
         try:
+            log.info(f"Lattice start — type={self.ltype} wall={self.wall_t} "
+                     f"cell={self.cell_sz} infill={self.infill_pct}% "
+                     f"seeds={self.n_seeds} strut_d={self.strut_diameter} "
+                     f"wall_only={self.wall_only} res={self.res}")
             from lattice import generate_lattice
+            def _progress_and_log(msg):
+                log.debug(f"  lattice: {msg}")
+                self.progress.emit(msg)
             v, f = generate_lattice(
                 self.stl_verts, self.wall_t, self.cell_sz, self.infill_pct,
                 stl_faces=self.stl_faces,
@@ -154,13 +175,16 @@ class LatticeWorker(QThread):
                 wall_only=self.wall_only,
                 n_seeds=self.n_seeds,
                 strut_diameter=self.strut_diameter,
-                progress_cb=lambda m: self.progress.emit(m),
+                progress_cb=_progress_and_log,
                 cancel_flag=self.cancel_flag,
             )
+            log.info(f"Lattice done — {len(v)} verts, {len(f)} faces")
             self.finished.emit(v, f)
         except InterruptedError:
+            log.info("Lattice cancelled by user")
             self.error.emit("__cancelled__")
         except Exception as e:
+            log.error(f"Lattice error: {e}\n{traceback.format_exc()}")
             self.error.emit(str(e))
 
 
@@ -1694,8 +1718,38 @@ class TripLyWindow(QMainWindow):
     def _on_lat_err(self, msg):
         self._progress.close()
         self.lat_prog.setVisible(False); self._btn_cancel_lat.setVisible(False)
-        if msg!="__cancelled__": QMessageBox.critical(self,"Lattice Error",msg)
-        else: self.status.showMessage("Cancelled.")
+        if msg != "__cancelled__":
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Lattice Error")
+            dlg.setMinimumWidth(480)
+            lay = QVBoxLayout(dlg)
+            lay.addWidget(QLabel("<b>Lattice generation failed:</b>"))
+            err_lbl = QLabel(msg)
+            err_lbl.setWordWrap(True)
+            err_lbl.setStyleSheet("color:#e05050;padding:8px;background:#1a1a1a;border-radius:4px;")
+            lay.addWidget(err_lbl)
+            log_lbl = QLabel(f"Full log: <code>{_LOG_PATH}</code>")
+            log_lbl.setWordWrap(True)
+            log_lbl.setStyleSheet("color:#888;font-size:10px;padding-top:4px;")
+            lay.addWidget(log_lbl)
+            btns = QHBoxLayout()
+            copy_btn = QPushButton("Copy Log Path")
+            copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(_LOG_PATH))
+            open_btn = QPushButton("Open Log")
+            def _open_log():
+                import subprocess
+                try: subprocess.Popen(['xdg-open', _LOG_PATH])
+                except Exception: pass
+            open_btn.clicked.connect(_open_log)
+            ok_btn = QPushButton("OK")
+            ok_btn.setObjectName("btn_primary")
+            ok_btn.clicked.connect(dlg.accept)
+            btns.addWidget(copy_btn); btns.addWidget(open_btn); btns.addStretch(); btns.addWidget(ok_btn)
+            lay.addLayout(btns)
+            self._center_dialog_on_screen(dlg)
+            dlg.exec()
+        else:
+            self.status.showMessage("Cancelled.")
 
     # ------------------------------------------------------------------
     # Transform
@@ -2055,7 +2109,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.3.2":
+        if self._cfg.get("terms_agreed_version") == "0.3.3":
             self._agreed_to_terms = True
             return True
 
@@ -2087,7 +2141,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.2 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.3 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2157,17 +2211,17 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.3.2"
+            self._cfg["terms_agreed_version"] = "0.3.3"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.3.2":
+        if self._cfg.get("whats_new_shown_version") == "0.3.3":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.3.2"
+        self._cfg["whats_new_shown_version"] = "0.3.3"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2175,13 +2229,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.3.2")
+        dlg.setWindowTitle("What's new in TriplyAM 0.3.3")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.2</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.3</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2189,14 +2243,9 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>Voronoi edge fix</b> — fixed empty union error; Voronoi now reliably generates struts</li>
-          <li><b>Lattice infill % direction corrected</b> — high % = more solid, low % = more sparse</li>
-        </ul>
-        <p><b>Coming soon:</b></p>
-        <ul>
-          <li>Feature-size aware TPMS</li>
-          <li>Face preservation for mechanical interfaces</li>
-          <li>3D file browser with thumbnail previews</li>
+          <li><b>Infill % direction fixed</b> — confirmed: high % = more solid, low % = more sparse</li>
+          <li><b>Debug log</b> — all lattice operations now logged to <code>~/.config/triply/triplyam_debug.log</code></li>
+          <li><b>Error dialog</b> — lattice errors now show log path with Open Log and Copy Path buttons</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
         Full changelog available in Settings → About TriplyAM → Changelog tab.
@@ -2242,7 +2291,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr = QLabel(
             "<b style='font-size:16px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;'>Version 0.3.2 Beta</span>"
+            "<br><span style='color:#888;'>Version 0.3.3 Beta</span>"
             "<br><span style='color:#888;'>Created by Orville Wright IV &nbsp;·&nbsp; © 2025 All rights reserved.</span>"
         )
         hdr.setWordWrap(True)
@@ -2282,13 +2331,14 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.3.2 — Beta <span class='tag'>current</span></h3>
+        <h3>0.3.3 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Fixed Voronoi empty union — ridge iteration now correctly uses ridge_points index filter</li>
-          <li>Fixed lattice infill % direction — high % = more solid, low % = more sparse</li>
+          <li>Fixed lattice infill % direction — confirmed high % = more solid</li>
+          <li>Debug log added — all operations logged to ~/.config/triply/triplyam_debug.log</li>
+          <li>Error dialog now shows log path with Open Log and Copy Path buttons</li>
         </ul>
 
-        <h3>0.3.1 — Beta</h3>
+        <h3>0.3.2 — Beta</h3>
         <ul>
           <li>Wall thickness fully decoupled from cell size — changing cell size no longer affects wall thickness</li>
           <li>Physical formula: threshold = (wall_mm / 5.0) × field_max — cell-size independent</li>
