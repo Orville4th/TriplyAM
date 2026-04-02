@@ -647,6 +647,10 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
 
         tpms_m = _to_manifold(tv, tf)
         _prog("Clipping TPMS to cavity...")
+        # Always clip to inner_m — the cavity after shell offset.
+        # When wall_only=True, inner_m IS part_m so behaviour is identical.
+        # When a shell exists, inner_m is the shrunken interior, so the lattice
+        # fills only the cavity; shell_m is then unioned on top in Step 3.
         inner_lattice_m = _manifold_intersect(tpms_m, inner_m)
         _prog(f"Clipped: {inner_lattice_m.num_tri()} tris")
         _check()
