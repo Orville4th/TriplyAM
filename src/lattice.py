@@ -113,22 +113,12 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
 
-    # ── Isovalue strategy per surface type ────────────────────────────────────
-    # Gyroid oscillates symmetrically around 0; solid material lives in the band
-    # near the surface where |field| is small.  High infill → wide band → low
-    # threshold on |field|.  threshold_frac = 1 - infill gives the right sense.
-    #
-    # Schwarz P and Schoen I-WP are also zero-mean surfaces but their "solid"
-    # region (the wall of the minimal surface) is best selected by the SIGNED
-    # field directly: solid where field > iso_level, void where field < iso_level.
-    # The iso_level is mapped from infill_pct so that high % → more solid.
-    # Schwarz D behaves like Gyroid (|field| threshold works correctly).
-    #
-    # Per-type selection:
-    USE_ABS_THRESHOLD  = {"Gyroid", "Schwarz D"}   # |field| < threshold → solid
-    USE_SIGNED_ISO     = {"Schwarz P", "Schoen I-WP"}  # field > iso → solid
-
+    # solid = where |field| < threshold.
+    # Confirmed by user: high infill_pct was producing sparse results.
+    # Fix: invert so high % → low threshold_frac → small threshold → more of the
+    # field counts as solid (the gyroid surface band is near field_max, not zero).
     infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
+    threshold_frac = 1.0 - infill  # 70% → threshold=0.30*field_max → dense ✓
 
     pad = cell_size
     origin = mins - pad
@@ -144,35 +134,20 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     field = fn(X, Y, Z, cell_size)
 
-    if lattice_type in USE_ABS_THRESHOLD:
-        # sdf < 0  →  inside solid wall  (field close to surface/zero)
-        # sdf > 0  →  void space
-        field_abs = np.abs(field)
-        field_max = float(field_abs.max())
-        if field_max < 1e-6:
-            field_max = 1.0
-        threshold_frac = 1.0 - infill   # high infill → low threshold → more solid
-        threshold = float(np.clip(threshold_frac * field_max,
-                                  field_max * 0.005, field_max * 0.98))
-        # sdf<0 = solid, sdf>0 = void
-        sdf = (field_abs - threshold).astype(np.float32)
-    else:
-        # USE_SIGNED_ISO: solid where field > iso_level
-        # Map infill linearly: 50% → iso=0 (half solid), 100% → iso=field_min (all solid)
-        f_min = float(field.min())
-        f_max = float(field.max())
-        # iso slides from f_max (0% solid) to f_min (100% solid)
-        iso_level = f_max - infill * (f_max - f_min)
-        iso_level = float(np.clip(iso_level,
-                                  f_min + (f_max - f_min) * 0.01,
-                                  f_max - (f_max - f_min) * 0.01))
-        # sdf < 0 = solid (field > iso), sdf > 0 = void
-        sdf = (iso_level - field).astype(np.float32)
+    field_abs = np.abs(field)
+    field_max = float(field_abs.max())
+    if field_max < 1e-6:
+        field_max = 1.0
 
-    # Open boundaries — let the TPMS surface terminate naturally at the bbox
-    # edges instead of creating artificial flat wall caps.  Set boundary voxels
-    # to void (+1.0) so marching cubes sees open space there.
-    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
+    threshold = threshold_frac * field_max
+    threshold = max(threshold, field_max * 0.005)
+    threshold = min(threshold, field_max * 0.98)
+
+    # sdf < 0 = solid wall material, sdf > 0 = void
+    sdf = (field_abs - threshold).astype(np.float32)
+
+    # Seal boundaries as void
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
 
     if sdf.min() >= 0:
         raise ValueError(

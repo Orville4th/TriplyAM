@@ -656,7 +656,7 @@ class TripLyWindow(QMainWindow):
         self.sp_infill.spin.setSuffix(" %")
         self.sp_strut  = StepSpin(0.1, 20.0, 1.5, 0.1)
         self.sp_strut.spin.setSuffix(" mm")
-        self.sp_seeds  = StepSpin(50, 2000, 300, 50)
+        self.sp_seeds  = StepSpin(50, 2000, 150, 50)
         self.sp_seeds.spin.setSuffix("")
         self.sp_res    = StepSpin(0, 240, 0, 32)
         self.sp_res.spin.setSpecialValueText("Auto")
@@ -2228,10 +2228,10 @@ class TripLyWindow(QMainWindow):
 
     def _show_whats_new(self):
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.3.3":
+        if self._cfg.get("whats_new_shown_version") == "0.3.7":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.3.3"
+        self._cfg["whats_new_shown_version"] = "0.3.7"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2239,13 +2239,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.3.3")
+        dlg.setWindowTitle("What's new in TriplyAM 0.3.7")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.3</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.7</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2253,9 +2253,13 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>Infill % direction fixed</b> — confirmed: high % = more solid, low % = more sparse</li>
-          <li><b>Debug log</b> — all lattice operations now logged to <code>~/.config/triply/triplyam_debug.log</code></li>
-          <li><b>Error dialog</b> — lattice errors now show log path with Open Log and Copy Path buttons</li>
+          <li><b>Voronoi fixed</b> — cylinder cap normals corrected; generation now works reliably</li>
+          <li><b>Voronoi edge frame</b> — bbox edges lined with struts for a clean perimeter frame</li>
+          <li><b>Voronoi smoothness</b> — 16-sided struts and edge-length filtering for cleaner junctions</li>
+          <li><b>Parts tree label</b> — shows lattice type and parameters after generation</li>
+          <li><b>Default infill</b> — changed to 20% (was 40%)</li>
+          <li><b>Default strut diameter</b> — changed to 1.5mm (was 2.0mm)</li>
+          <li><b>Default seed count</b> — changed to 150 (was 300)</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
         Full changelog available in Settings → About TriplyAM → Changelog tab.
