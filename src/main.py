@@ -2115,9 +2115,8 @@ class TripLyWindow(QMainWindow):
         # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
         # This disclaimer MUST be shown on every new install and every update.
         # To trigger it on update: bump `terms_agreed_version` to the new release
-        # version string (e.g. "0.4.0") in BOTH the equality check below AND the
-        # save line after the user clicks "I Agree". Do this on EVERY release.
-        # !! ALSO UPDATE THE CHANGELOG SECTION BELOW ON EVERY RELEASE !!
+        # version string (e.g. "0.4.1") in BOTH the equality check below AND the
+        # save line after the user clicks "I Agree". Do this on every release.
         # DO NOT delete this function, skip the call in main(), or suppress the
         # dialog in any other way. Users must agree to terms before using the app.
         # ─────────────────────────────────────────────────────────────────────
@@ -2128,7 +2127,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.4.0":
+        if self._cfg.get("terms_agreed_version") == "0.4.1":
             self._agreed_to_terms = True
             return True
 
@@ -2160,7 +2159,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.4.0 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.4.1 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2230,7 +2229,7 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.4.0"
+            self._cfg["terms_agreed_version"] = "0.4.1"
             save_config(self._cfg)
             return True
         return False
@@ -2239,16 +2238,16 @@ class TripLyWindow(QMainWindow):
         # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
         # This "What's New" dialog MUST show on every new install and every update.
         # To trigger it on update: bump `whats_new_shown_version` to the new release
-        # version string (e.g. "0.4.0") in BOTH the equality check below AND the
+        # version string (e.g. "0.4.1") in BOTH the equality check below AND the
         # save line immediately after. Also update the dialog title, header label,
         # and bullet list content to reflect the actual changes in this release.
         # DO NOT delete this function or skip the call in main().
         # ─────────────────────────────────────────────────────────────────────
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.4.0":
+        if self._cfg.get("whats_new_shown_version") == "0.4.1":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.4.0"
+        self._cfg["whats_new_shown_version"] = "0.4.1"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2256,13 +2255,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.4.0")
+        dlg.setWindowTitle("What's new in TriplyAM 0.4.1")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.4.0</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.4.1</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2349,8 +2348,6 @@ class TripLyWindow(QMainWindow):
         tabs.addTab(about_tb, "About")
 
         # ── Changelog tab ──────────────────────────────────────────
-        # !! UPDATE THIS CHANGELOG ON EVERY RELEASE !!
-        # Add a new <h3> entry at the top. Mark it current. Remove 'current' from previous.
         cl_tb = QTextBrowser()
         cl_tb.setHtml("""
         <style>
@@ -2359,7 +2356,20 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.3.13 — Beta <span class='tag'>current</span></h3>
+        <h3>0.4.1 — Beta <span class='tag'>current</span></h3>
+        <ul>
+          <li>Shell-on inversion fixed — TPMS volume sign corrected before intersection with inner cavity; struts are solid, not void</li>
+          <li>Outer shell restored — full-thickness wall around lattice infill</li>
+        </ul>
+
+        <h3>0.4.0 — Beta</h3>
+        <ul>
+          <li>All pipelines separated — wall-only and shell-on each have dedicated builder functions</li>
+          <li>Voronoi (Random) — renamed from Voronoi, pure random seeds, organic irregular structure</li>
+          <li>Voronoi (Structure) — Lloyd-relaxed seeds for uniform cell sizes</li>
+        </ul>
+
+        <h3>0.3.13 — Beta</h3>
         <ul>
           <li>Shell-on pipeline fully isolated — _generate_shell_lattice() is separate code from wall_only path; the two can no longer interfere</li>
           <li>TPMS infill density fixed — percentile now computed on interior voxels only, eliminating density artifacts from boundary sealing</li>
@@ -2414,72 +2424,6 @@ class TripLyWindow(QMainWindow):
         <ul>
           <li>Voronoi cylinder cap winding fixed — both end caps now have correct outward normals</li>
           <li>Resolves "Voronoi cylinder union is empty" error that blocked all Voronoi generation</li>
-        </ul>
-
-        <!-- !! UPDATE THIS CHANGELOG ON EVERY RELEASE !! -->
-        <h3>0.4.0 — Beta <span class='tag'>current</span></h3>
-        <ul>
-          <li>Wall-only and shell-on pipelines fully separated — each has dedicated TPMS and Voronoi builder functions; changes to one cannot affect the other</li>
-          <li>Voronoi renamed to Voronoi (Random) — same pure random seeds, organic irregular structure</li>
-          <li>Voronoi (Structure) added — Lloyd-relaxed seeds for uniform cell sizes and structured appearance</li>
-          <li>Shell-on TPMS uses -1.0 boundary sealing for clean open-mesh intersection with inner cavity</li>
-        </ul>
-
-        <h3>0.3.13 — Beta</h3>
-        <ul>
-          <li>TPMS boundary sealing changed to +1.0 (void) — produces closed mesh, eliminates diagonal flat-plane artifacts</li>
-          <li>Shell pipeline: auto-retry with flipped inner mesh winding if shell is empty</li>
-        </ul>
-
-        <h3>0.3.12 — Beta</h3>
-        <ul>
-          <li>Shell-on pipeline isolated as _generate_shell_lattice — completely separate from wall_only path</li>
-          <li>TPMS percentile computed on interior voxels only — eliminates density errors from boundary sealing</li>
-        </ul>
-
-        <h3>0.3.11 — Beta</h3>
-        <ul>
-          <li>TPMS boundary sealing reverted to -1.0 to fix corrupt manifold volume signs</li>
-          <li>Inner cavity normal flip now triggers on volume &lt;= 0, not just empty meshes</li>
-          <li>Startup disclaimer and what's new popups restored</li>
-        </ul>
-
-        <h3>0.3.10 — Beta</h3>
-        <ul>
-          <li>Shell-on rebuilt — inner cavity normal orientation corrected before boolean operations</li>
-        </ul>
-
-        <h3>0.3.9 — Beta</h3>
-        <ul>
-          <li>Shell-on clip target fixed — TPMS always clips to inner cavity, not outer boundary</li>
-        </ul>
-
-        <h3>0.3.8 — Beta</h3>
-        <ul>
-          <li>TPMS infill fixed for all surface types — percentile-based isovalue, no more inversion</li>
-        </ul>
-
-        <h3>0.3.7 — Beta</h3>
-        <ul>
-          <li>Defaults: infill 20%, strut diameter 1.5mm, seed count 150</li>
-          <li>Parts tree label shows lattice type and parameters after generation</li>
-        </ul>
-
-        <h3>0.3.6 — Beta</h3>
-        <ul>
-          <li>Voronoi edge-length filtering — removes overlong crossing struts and degenerate needles</li>
-          <li>Cylinder segments bumped to 16 for smoother struts</li>
-        </ul>
-
-        <h3>0.3.5 — Beta</h3>
-        <ul>
-          <li>Voronoi bbox edge frame — 12 perimeter struts; internal struts terminate into it</li>
-          <li>Voronoi midpoint filtering — eliminates stray floating struts</li>
-        </ul>
-
-        <h3>0.3.4 — Beta</h3>
-        <ul>
-          <li>Voronoi cylinder cap winding fixed — resolves "union is empty" error</li>
         </ul>
 
         <h3>0.3.3 — Beta</h3>
