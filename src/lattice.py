@@ -113,12 +113,22 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
 
-    # solid = where |field| < threshold.
-    # Confirmed by user: high infill_pct was producing sparse results.
-    # Fix: invert so high % → low threshold_frac → small threshold → more of the
-    # field counts as solid (the gyroid surface band is near field_max, not zero).
+    # ── Isovalue strategy per surface type ────────────────────────────────────
+    # Gyroid oscillates symmetrically around 0; solid material lives in the band
+    # near the surface where |field| is small.  High infill → wide band → low
+    # threshold on |field|.  threshold_frac = 1 - infill gives the right sense.
+    #
+    # Schwarz P and Schoen I-WP are also zero-mean surfaces but their "solid"
+    # region (the wall of the minimal surface) is best selected by the SIGNED
+    # field directly: solid where field > iso_level, void where field < iso_level.
+    # The iso_level is mapped from infill_pct so that high % → more solid.
+    # Schwarz D behaves like Gyroid (|field| threshold works correctly).
+    #
+    # Per-type selection:
+    USE_ABS_THRESHOLD  = {"Gyroid", "Schwarz D"}   # |field| < threshold → solid
+    USE_SIGNED_ISO     = {"Schwarz P", "Schoen I-WP"}  # field > iso → solid
+
     infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
-    threshold_frac = 1.0 - infill  # 70% → threshold=0.30*field_max → dense ✓
 
     pad = cell_size
     origin = mins - pad
@@ -134,20 +144,35 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     field = fn(X, Y, Z, cell_size)
 
-    field_abs = np.abs(field)
-    field_max = float(field_abs.max())
-    if field_max < 1e-6:
-        field_max = 1.0
+    if lattice_type in USE_ABS_THRESHOLD:
+        # sdf < 0  →  inside solid wall  (field close to surface/zero)
+        # sdf > 0  →  void space
+        field_abs = np.abs(field)
+        field_max = float(field_abs.max())
+        if field_max < 1e-6:
+            field_max = 1.0
+        threshold_frac = 1.0 - infill   # high infill → low threshold → more solid
+        threshold = float(np.clip(threshold_frac * field_max,
+                                  field_max * 0.005, field_max * 0.98))
+        # sdf<0 = solid, sdf>0 = void
+        sdf = (field_abs - threshold).astype(np.float32)
+    else:
+        # USE_SIGNED_ISO: solid where field > iso_level
+        # Map infill linearly: 50% → iso=0 (half solid), 100% → iso=field_min (all solid)
+        f_min = float(field.min())
+        f_max = float(field.max())
+        # iso slides from f_max (0% solid) to f_min (100% solid)
+        iso_level = f_max - infill * (f_max - f_min)
+        iso_level = float(np.clip(iso_level,
+                                  f_min + (f_max - f_min) * 0.01,
+                                  f_max - (f_max - f_min) * 0.01))
+        # sdf < 0 = solid (field > iso), sdf > 0 = void
+        sdf = (iso_level - field).astype(np.float32)
 
-    threshold = threshold_frac * field_max
-    threshold = max(threshold, field_max * 0.005)
-    threshold = min(threshold, field_max * 0.98)
-
-    # sdf < 0 = solid wall material, sdf > 0 = void
-    sdf = (field_abs - threshold).astype(np.float32)
-
-    # Seal boundaries as void
-    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
+    # Open boundaries — let the TPMS surface terminate naturally at the bbox
+    # edges instead of creating artificial flat wall caps.  Set boundary voxels
+    # to void (+1.0) so marching cubes sees open space there.
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
 
     if sdf.min() >= 0:
         raise ValueError(
@@ -256,14 +281,18 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
 
     # ── Extract edges ──────────────────────────────────────────────────────────
     # Keep ridges where BOTH seed points are original (index < n_orig).
-    # This guarantees the ridge lies inside the original bbox.
+    # Additionally filter by midpoint: drop edges whose midpoint lies well outside
+    # the bbox — these produce stray floating struts after clipping.
     _prog("Voronoi: extracting edges...")
     n_orig = len(seeds)
     vv = vor.vertices
     edges = []
     skipped_infinite = 0
     skipped_mirror = 0
+    skipped_outside = 0
 
+    # Allow midpoints up to one strut-radius outside the bbox
+    mid_pad = strut_radius
     for (s0, s1), ridge_verts in zip(vor.ridge_points, vor.ridge_vertices):
         if -1 in ridge_verts:
             skipped_infinite += 1
@@ -272,10 +301,43 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
             skipped_mirror += 1
             continue
         a, b = ridge_verts[0], ridge_verts[1]
-        edges.append((vv[a], vv[b]))
+        pa, pb = vv[a], vv[b]
+        mid = (pa + pb) * 0.5
+        if np.any(mid < mins - mid_pad) or np.any(mid > maxs + mid_pad):
+            skipped_outside += 1
+            continue
+        edges.append((pa, pb))
 
     _log.debug(f"Voronoi edges: {len(edges)} kept, "
-               f"{skipped_infinite} infinite skipped, {skipped_mirror} mirror skipped")
+               f"{skipped_infinite} infinite skipped, {skipped_mirror} mirror skipped, "
+               f"{skipped_outside} outside skipped")
+
+    # ── Add bounding-box edge-frame struts ────────────────────────────────────
+    # Build 12 struts along every edge of the part bbox so internal Voronoi
+    # struts always terminate into a solid perimeter frame — like a carbon lattice.
+    corners = np.array([[mins[0], mins[1], mins[2]],
+                        [maxs[0], mins[1], mins[2]],
+                        [maxs[0], maxs[1], mins[2]],
+                        [mins[0], maxs[1], mins[2]],
+                        [mins[0], mins[1], maxs[2]],
+                        [maxs[0], mins[1], maxs[2]],
+                        [maxs[0], maxs[1], maxs[2]],
+                        [mins[0], maxs[1], maxs[2]]])
+    bbox_edges = [(0,1),(1,2),(2,3),(3,0),   # bottom face
+                  (4,5),(5,6),(6,7),(7,4),   # top face
+                  (0,4),(1,5),(2,6),(3,7)]   # verticals
+    frame_manifolds = []
+    for i0, i1 in bbox_edges:
+        cv, cf = _cylinder_mesh(corners[i0], corners[i1], strut_radius, segments=12)
+        if len(cf) == 0:
+            continue
+        try:
+            m = _to_manifold(cv, cf)
+            if not m.is_empty():
+                frame_manifolds.append(m)
+        except Exception:
+            continue
+    _log.debug(f"Voronoi frame: {len(frame_manifolds)}/12 edge struts built")
 
     if not edges:
         _log.error(f"Voronoi: no edges found. bbox={maxs-mins}, seeds={n_seeds}, "
@@ -298,7 +360,7 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         batch = edges[batch_start: batch_start + BATCH]
         batch_manifolds = []
         for p0, p1 in batch:
-            cv, cf = _cylinder_mesh(p0, p1, strut_radius, segments=8)
+            cv, cf = _cylinder_mesh(p0, p1, strut_radius, segments=12)
             if len(cf) == 0:
                 cyl_fail += 1
                 continue
@@ -344,6 +406,20 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
             "Voronoi cylinder union is empty — try increasing strut diameter or seed count."
         )
 
+    # ── Merge bbox edge-frame into union ──────────────────────────────────────
+    if frame_manifolds:
+        _prog("Voronoi: merging edge frame...")
+        frame_union = frame_manifolds[0]
+        for m in frame_manifolds[1:]:
+            try:
+                frame_union = frame_union + m
+            except Exception:
+                continue
+        try:
+            current_union = current_union + frame_union
+        except Exception as e:
+            _log.debug(f"Frame union merge failed: {e}")
+
     # ── Shell-off: Y-junction boundary connections ────────────────────────────
     if shell_off:
         _prog("Voronoi: finding boundary nodes...")
@@ -383,7 +459,7 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
                     if d <= d_near + YJUNC_TOL:
                         to_connect.append(j)
                 for j in to_connect:
-                    cv, cf = _cylinder_mesh(bn[i], bn[j], strut_radius, segments=8)
+                    cv, cf = _cylinder_mesh(bn[i], bn[j], strut_radius, segments=12)
                     if len(cf) == 0:
                         continue
                     try:
