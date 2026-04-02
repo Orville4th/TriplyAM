@@ -130,20 +130,22 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     field = fn(X, Y, Z, cell_size)
 
     # Percentile-based isovalue: solid = field > iso_level.
-    # np.percentile(field, 100-infill%) gives the exact iso so that
-    # infill% of voxels are above it — works correctly for all surface
-    # types (Gyroid, Schwarz P/D, Schoen I-WP) without any per-type logic.
-    iso_level = float(np.percentile(field, (1.0 - infill) * 100.0))
+    # IMPORTANT: compute percentile on INTERIOR voxels only.
+    # Boundary voxels are forced to -1.0 (solid) after this step, which would
+    # skew the percentile and produce the wrong infill density if included.
+    interior = field[1:-1, 1:-1, 1:-1]
+    iso_level = float(np.percentile(interior, (1.0 - infill) * 100.0))
 
     # sdf < 0 = solid (field > iso), sdf > 0 = void
     sdf = (iso_level - field).astype(np.float32)
 
-    # Seal boundaries as solid (-1.0) so marching_cubes produces an open mesh
-    # (no cap faces at the bbox boundary). This matches 0.3.3 behavior — the
-    # open TPMS mesh intersects correctly with inner_m/part_m in manifold3d.
-    # Sealing as void (+1.0) generates boundary cap triangles with inconsistent
-    # winding that corrupts the manifold volume sign.
-    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
+    # Seal boundaries as VOID (+1.0) so marching_cubes generates a CLOSED mesh.
+    # A closed mesh has consistent winding → correct positive volume for manifold3d.
+    # Intersecting a closed mesh with part_m clips the boundary caps cleanly at
+    # the part surface — no open-edge artifacts, no diagonal planes inside the part.
+    # Safe to use +1.0 here because the percentile was computed on interior voxels
+    # only (above), so the large +1.0 boundary values do not skew the isovalue.
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
 
     if sdf.min() >= 0:
         raise ValueError(
@@ -548,9 +550,9 @@ def _remove_small_components(verts, faces, min_fraction=0.01):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SHELL-ON PIPELINE — completely separate from wall_only path.
-# DO NOT MERGE with generate_lattice wall_only flow.
-# DO NOT MODIFY the wall_only path in generate_lattice below.
+# SHELL-ON PIPELINE — completely isolated from wall_only path.
+# DO NOT MERGE with generate_lattice. DO NOT MODIFY generate_lattice wall_only.
+# On every release: only add code here, never touch the wall_only path below.
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
@@ -558,15 +560,14 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
                              smooth_iterations, strut_diameter, n_seeds,
                              is_voronoi, progress_cb, cancel_flag):
     """
-    Shell-on lattice: outer wall + lattice infill inside cavity.
-    Entirely separate from the wall_only path which must not be touched.
+    Shell-on pipeline: outer wall + lattice infill inside cavity.
+    Completely separate from wall_only path in generate_lattice.
 
-    Pipeline:
-      A. MeshLib offset → inner cavity mesh
-      B. Build manifolds, correct normal orientation, compute shell
-      C. Generate TPMS/Voronoi over inner cavity bounds
-      D. Clip lattice to inner cavity
-      E. Union shell + lattice → return final Manifold
+    A. MeshLib inward offset → inner cavity mesh
+    B. Build manifolds, correct normal orientation, compute shell = part - inner
+    C. Generate TPMS/Voronoi over inner cavity bounds
+    D. Clip lattice to inner cavity
+    E. Union shell + lattice → return final Manifold
     """
     import meshlib.mrmeshpy as mr
 
@@ -577,7 +578,7 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
 
     wt = float(wall_thickness)
 
-    # ── A: inner cavity via MeshLib inward offset ─────────────────────────────
+    # A: inner cavity
     _prog(f"Computing shell offset ({wt}mm)...")
     part_mr = _to_mr(sv, sf)
     op = mr.OffsetParameters()
@@ -587,37 +588,42 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
     _prog(f"Inner cavity: {len(ifc)} faces")
     _check()
 
-    # ── B: manifolds + shell ──────────────────────────────────────────────────
+    # B: manifolds + shell
     part_m  = _to_manifold(sv, sf)
     inner_m = _to_manifold(iv, ifc)
+    _log.debug(f"shell: part vol={part_m.volume():.1f}, inner raw={inner_m.volume():.1f}")
 
-    _log.debug(f"shell_pipeline: part vol={part_m.volume():.1f}, "
-               f"inner vol raw={inner_m.volume():.1f}")
-
-    # mcOffsetMesh frequently returns inverted normals → negative volume.
-    # Flip winding until we have a positive-volume closed manifold.
+    # mcOffsetMesh can return inverted normals. Flip if volume <= 0.
     if inner_m.is_empty() or inner_m.volume() <= 0:
-        inner_m = _to_manifold(iv, ifc[:, [0, 2, 1]].astype(np.int32))
-        _log.debug(f"shell_pipeline: flipped inner, vol now={inner_m.volume():.1f}")
+        inner_m = _to_manifold(iv, ifc[:, [0,2,1]].astype(np.int32))
+        _log.debug(f"shell: flipped inner (was <=0), vol={inner_m.volume():.1f}")
 
     shell_m = part_m - inner_m
-    _log.debug(f"shell_pipeline: shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
+    _log.debug(f"shell: shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
+
+    # If shell is empty or less than 1% of part volume, the winding was still
+    # wrong — flip inner_m and retry.
+    min_shell_vol = part_m.volume() * 0.01
+    if shell_m.is_empty() or shell_m.num_tri() == 0 or shell_m.volume() < min_shell_vol:
+        _log.debug(f"shell: shell empty/tiny, retrying with flipped inner_m")
+        inner_m = _to_manifold(iv, ifc[:, [0,2,1]].astype(np.int32))
+        _log.debug(f"shell: flipped inner_m vol={inner_m.volume():.1f}")
+        shell_m = part_m - inner_m
+        _log.debug(f"shell: retry shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
+
     _prog(f"Shell: {shell_m.num_tri()} tris, vol={shell_m.volume():.0f}")
 
     if shell_m.is_empty() or shell_m.num_tri() == 0:
-        raise ValueError(
-            "Shell mesh is empty — wall thickness may be too large for this part."
-        )
+        raise ValueError("Shell mesh is empty — wall thickness may be too large for this part.")
     _check()
 
-    # ── C: generate lattice bounded to inner cavity ───────────────────────────
+    # C: lattice over inner cavity bounds
     mins_i = iv.min(axis=0).astype(np.float64)
     maxs_i = iv.max(axis=0).astype(np.float64)
 
     if is_voronoi:
         strut_radius = max(float(strut_diameter) / 2.0, 0.05)
-        _prog(f"Generating Voronoi inside cavity "
-              f"(d={strut_diameter:.2f}mm, seeds={n_seeds})...")
+        _prog(f"Generating Voronoi inside cavity (d={strut_diameter:.2f}mm, seeds={n_seeds})...")
         tv, tf = _build_voronoi_mesh(
             mins_i, maxs_i, strut_radius, int(n_seeds),
             shell_off=False, part_manifold=inner_m, progress_cb=_prog
@@ -632,19 +638,18 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
         _prog(f"TPMS: {len(tf)} faces")
         _check()
 
-        # ── D: clip to inner cavity ───────────────────────────────────────────
+        # D: clip to inner cavity
         tpms_m = _to_manifold(tv, tf)
         _prog("Clipping TPMS to inner cavity...")
         lattice_m = _manifold_intersect(tpms_m, inner_m)
-        _log.debug(f"shell_pipeline: clipped vol={lattice_m.volume():.1f}, "
-                   f"tris={lattice_m.num_tri()}")
+        _log.debug(f"shell: clipped vol={lattice_m.volume():.1f}, tris={lattice_m.num_tri()}")
         _prog(f"Clipped: {lattice_m.num_tri()} tris, vol={lattice_m.volume():.0f}")
         _check()
 
-    # ── E: union shell + lattice ──────────────────────────────────────────────
+    # E: union
     _prog("Combining shell + lattice...")
     final_m = shell_m + lattice_m
-    _log.debug(f"shell_pipeline: final vol={final_m.volume():.1f}, tris={final_m.num_tri()}")
+    _log.debug(f"shell: final vol={final_m.volume():.1f}, tris={final_m.num_tri()}")
     _prog(f"Final: {final_m.num_tri()} tris, vol={final_m.volume():.0f}")
     _check()
 
@@ -706,11 +711,9 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
             voxel_size = float(np.clip(np.max(span)/resolution, 0.05, 1.0))
         _prog(f"Voxel size: {voxel_size:.3f}mm")
     else:
-        voxel_size = 0.2  # not used for Voronoi but needed by shell pipeline
+        voxel_size = 0.2  # Voronoi doesn't use voxel_size for lattice, needed by shell pipeline
 
-    # ── Shell-on: delegate entirely to separate pipeline ──────────────────────
-    # The wall_only path below is PROVEN WORKING — do not touch it.
-    # All shell-on work happens in _generate_shell_lattice exclusively.
+    # ── Shell-on: use isolated pipeline, do not touch wall_only path ──────────
     wt = float(wall_thickness)
     if wt > 0 and not wall_only:
         final_m = _generate_shell_lattice(
@@ -733,10 +736,11 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
         return rv.astype(np.float32), rf.astype(np.int32)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # WALL-ONLY PATH — do not modify. This path is proven working.
+    # WALL-ONLY PATH — do not modify. Proven working.
     # ══════════════════════════════════════════════════════════════════════════
 
     # ── Step 1: MeshLib shell offset ───────────────────────────────────────────
+    wt = float(wall_thickness)
     part_mr = _to_mr(sv, sf)
     part_m  = _to_manifold(sv, sf)
 

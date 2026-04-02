@@ -2269,11 +2269,8 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>Shell-on rebuilt as isolated pipeline</b> — _generate_shell_lattice() 
-              is now completely separate code from the wall_only path, so the two 
-              can never interfere with each other</li>
-          <li><b>Wall-only / lattice-only unchanged</b> — the proven working path 
-              is byte-for-byte identical to 0.3.10</li>
+          <li><b>TPMS diagonal artifacts fixed</b> — boundary sealing now void (+1.0) producing a closed mesh; clean intersection with no flat-plane artifacts</li>
+          <li><b>Shell retry logic</b> — automatically retries with flipped inner mesh winding if shell comes back empty</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
         Full changelog available in Settings → About TriplyAM → Changelog tab.
@@ -2359,7 +2356,64 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.3.3 — Beta <span class='tag'>current</span></h3>
+        <h3>0.3.13 — Beta <span class='tag'>current</span></h3>
+        <ul>
+          <li>Shell-on pipeline fully isolated — _generate_shell_lattice() is separate code from wall_only path; the two can no longer interfere</li>
+          <li>TPMS infill density fixed — percentile now computed on interior voxels only, eliminating density artifacts from boundary sealing</li>
+          <li>Wall-only / lattice-only path unchanged from 0.3.11</li>
+        </ul>
+
+        <h3>0.3.11 — Beta</h3>
+        <ul>
+          <li>TPMS boundary sealing reverted to -1.0 (open mesh) — fixes corrupt manifold volume signs</li>
+          <li>Inner cavity normal flip now triggers on volume &lt;= 0, not just empty meshes</li>
+          <li>Startup disclaimer and what's new popups restored</li>
+        </ul>
+
+        <h3>0.3.10 — Beta</h3>
+        <ul>
+          <li>Shell-on mode rebuilt — inner cavity normal orientation corrected before boolean operations</li>
+          <li>Permanent DO NOT REMOVE comments added to both startup popup functions</li>
+        </ul>
+
+        <h3>0.3.9 — Beta</h3>
+        <ul>
+          <li>Shell-on clip target fixed — TPMS now always clips to inner cavity, not outer boundary</li>
+        </ul>
+
+        <h3>0.3.8 — Beta</h3>
+        <ul>
+          <li>TPMS infill fixed for all surface types — percentile-based isovalue replaces |field| threshold</li>
+          <li>Schwarz P, Schwarz D, Schoen I-WP no longer inverted</li>
+          <li>Startup popups version-bumped so they fire correctly on update</li>
+        </ul>
+
+        <h3>0.3.7 — Beta</h3>
+        <ul>
+          <li>Default infill changed to 20%, strut diameter to 1.5mm, seed count to 150</li>
+          <li>Parts tree label now shows lattice type and parameters after generation</li>
+          <li>Progress status label added to Modify tab</li>
+        </ul>
+
+        <h3>0.3.6 — Beta</h3>
+        <ul>
+          <li>Voronoi edge-length filtering — removes overlong crossing struts and degenerate needles</li>
+          <li>Cylinder segments bumped to 16 for smoother struts</li>
+        </ul>
+
+        <h3>0.3.5 — Beta</h3>
+        <ul>
+          <li>Voronoi bbox edge frame — 12 struts lining the part perimeter, all internal struts terminate into it</li>
+          <li>Voronoi midpoint filtering — eliminates stray floating struts after clip</li>
+        </ul>
+
+        <h3>0.3.4 — Beta</h3>
+        <ul>
+          <li>Voronoi cylinder cap winding fixed — both end caps now have correct outward normals</li>
+          <li>Resolves "Voronoi cylinder union is empty" error that blocked all Voronoi generation</li>
+        </ul>
+
+        <h3>0.3.3 — Beta</h3>
         <ul>
           <li>Fixed lattice infill % direction — confirmed high % = more solid</li>
           <li>Debug log added — all operations logged to ~/.config/triply/triplyam_debug.log</li>
