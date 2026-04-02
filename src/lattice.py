@@ -138,8 +138,12 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     # sdf < 0 = solid (field > iso), sdf > 0 = void
     sdf = (iso_level - field).astype(np.float32)
 
-    # Seal boundaries as void so marching cubes sees open space at bbox edges
-    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
+    # Seal boundaries as solid (-1.0) so marching_cubes produces an open mesh
+    # (no cap faces at the bbox boundary). This matches 0.3.3 behavior — the
+    # open TPMS mesh intersects correctly with inner_m/part_m in manifold3d.
+    # Sealing as void (+1.0) generates boundary cap triangles with inconsistent
+    # winding that corrupts the manifold volume sign.
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
 
     if sdf.min() >= 0:
         raise ValueError(
@@ -613,10 +617,10 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
         _check()
 
         inner_m = _to_manifold(iv, ifc)
-        # mcOffsetMesh frequently returns a mesh with inverted normals (negative
-        # volume). Flip face winding to correct orientation whenever that happens.
-        # The old guard only flipped on is_empty() which misses the negative-volume case.
-        if inner_m.is_empty() or inner_m.volume() < 0:
+        # mcOffsetMesh can return inverted normals (volume <= 0).
+        # Flip face winding to get a positive-volume manifold so that
+        # part_m - inner_m and intersect(tpms, inner_m) both work correctly.
+        if inner_m.is_empty() or inner_m.volume() <= 0:
             inner_m = _to_manifold(iv, ifc[:,[0,2,1]].astype(np.int32))
 
         _prog(f"Part vol={part_m.volume():.0f}, Inner vol={inner_m.volume():.0f}")
@@ -655,7 +659,7 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
         # When a shell exists, inner_m is the shrunken interior, so the lattice
         # fills only the cavity; shell_m is then unioned on top in Step 3.
         inner_lattice_m = _manifold_intersect(tpms_m, inner_m)
-        _prog(f"Clipped: {inner_lattice_m.num_tri()} tris")
+        _prog(f"Clipped: {inner_lattice_m.num_tri()} tris, vol={inner_lattice_m.volume():.0f}")
         _check()
 
     # ── Step 3: Combine shell + lattice ───────────────────────────────────────
