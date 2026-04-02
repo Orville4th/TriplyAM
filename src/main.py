@@ -2115,7 +2115,7 @@ class TripLyWindow(QMainWindow):
         # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
         # This disclaimer MUST be shown on every new install and every update.
         # To trigger it on update: bump `terms_agreed_version` to the new release
-        # version string (e.g. "0.4.1") in BOTH the equality check below AND the
+        # version string (e.g. "0.4.2") in BOTH the equality check below AND the
         # save line after the user clicks "I Agree". Do this on every release.
         # DO NOT delete this function, skip the call in main(), or suppress the
         # dialog in any other way. Users must agree to terms before using the app.
@@ -2127,7 +2127,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.4.1":
+        if self._cfg.get("terms_agreed_version") == "0.4.2":
             self._agreed_to_terms = True
             return True
 
@@ -2159,7 +2159,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.4.1 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.4.2 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2229,7 +2229,7 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.4.1"
+            self._cfg["terms_agreed_version"] = "0.4.2"
             save_config(self._cfg)
             return True
         return False
@@ -2238,16 +2238,16 @@ class TripLyWindow(QMainWindow):
         # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
         # This "What's New" dialog MUST show on every new install and every update.
         # To trigger it on update: bump `whats_new_shown_version` to the new release
-        # version string (e.g. "0.4.1") in BOTH the equality check below AND the
+        # version string (e.g. "0.4.2") in BOTH the equality check below AND the
         # save line immediately after. Also update the dialog title, header label,
         # and bullet list content to reflect the actual changes in this release.
         # DO NOT delete this function or skip the call in main().
         # ─────────────────────────────────────────────────────────────────────
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.4.1":
+        if self._cfg.get("whats_new_shown_version") == "0.4.2":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.4.1"
+        self._cfg["whats_new_shown_version"] = "0.4.2"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2255,13 +2255,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.4.1")
+        dlg.setWindowTitle("What's new in TriplyAM 0.4.2")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.4.1</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.4.2</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2356,17 +2356,13 @@ class TripLyWindow(QMainWindow):
           .tag { color: #888; font-size: 11px; font-weight: normal; }
         </style>
 
-        <h3>0.4.1 — Beta <span class='tag'>current</span></h3>
+        <!-- !! UPDATE THIS CHANGELOG ON EVERY RELEASE — add new h3 at top !! -->
+        <h3>0.4.2 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Shell-on inversion fixed — TPMS volume sign corrected before intersection with inner cavity; struts are solid, not void</li>
-          <li>Outer shell restored — full-thickness wall around lattice infill</li>
-        </ul>
-
-        <h3>0.4.0 — Beta</h3>
-        <ul>
-          <li>All pipelines separated — wall-only and shell-on each have dedicated builder functions</li>
-          <li>Voronoi (Random) — renamed from Voronoi, pure random seeds, organic irregular structure</li>
-          <li>Voronoi (Structure) — Lloyd-relaxed seeds for uniform cell sizes</li>
+          <li>Shell-on inversion fixed — removed incorrect manifold winding flips that were inverting lattice and shell; boolean operations now correct</li>
+          <li>Voronoi (Random) — renamed from Voronoi, same algorithm</li>
+          <li>Voronoi (Structure) — new Lloyd-relaxed option with uniform cell sizes</li>
+          <li>All pipelines separated — shell-on and wall-only use isolated code paths</li>
         </ul>
 
         <h3>0.3.13 — Beta</h3>

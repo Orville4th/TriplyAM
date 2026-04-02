@@ -40,7 +40,7 @@ LATTICE_FNS = {
     "Schoen I-WP": _schoen_iwp,
 }
 TPMS_NAMES    = list(LATTICE_FNS.keys())
-VORONOI_NAMES = ["Voronoi"]
+VORONOI_NAMES = ["Voronoi (Random)", "Voronoi (Structure)"]
 LATTICE_NAMES = TPMS_NAMES + VORONOI_NAMES
 
 
@@ -210,17 +210,26 @@ def _cylinder_mesh(p0, p1, radius, segments=8):
     return verts, np.array(faces, dtype=np.int32)
 
 
+
+def _build_voronoi_mesh_random(mins, maxs, strut_radius, n_seeds, shell_off,
+                                part_manifold, progress_cb=None):
+    """Voronoi (Random): pure random seeds — organic, irregular."""
+    return _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
+                               part_manifold, lloyd_iterations=0,
+                               progress_cb=progress_cb)
+
+
+def _build_voronoi_mesh_lloyd(mins, maxs, strut_radius, n_seeds, shell_off,
+                               part_manifold, progress_cb=None):
+    """Voronoi (Structure): Lloyd-relaxed seeds — uniform cells."""
+    return _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
+                               part_manifold, lloyd_iterations=8,
+                               progress_cb=progress_cb)
+
+
 def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
-                        part_manifold, progress_cb=None):
-    """
-    Voronoi strut lattice clipped to part_manifold.
-
-    shell_off=False (Shell-on):  arms reach wall naturally.
-    shell_off=True  (Shell-off): + boundary nodes connected with Y-junctions.
-
-    Key fix vs 0.3.0: edges are kept when EITHER endpoint is inside the padded
-    bbox, not both — this prevents valid near-boundary edges being discarded.
-    """
+                        part_manifold, lloyd_iterations=0, progress_cb=None):
+    """Core Voronoi. lloyd_iterations=0→random, >0→Lloyd-relaxed."""
     from scipy.spatial import Voronoi, cKDTree
 
     def _prog(msg):
@@ -238,6 +247,25 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
             safe_maxs[dim] = maxs[dim]
     seeds = rng.uniform(safe_mins, safe_maxs,
                         size=(int(n_seeds), 3)).astype(np.float64)
+
+    if lloyd_iterations > 0:
+        _prog(f"Voronoi: Lloyd relaxation ({lloyd_iterations} passes)...")
+        for _iter in range(lloyd_iterations):
+            mirrors_l = []
+            for dim in range(3):
+                lo, hi = mins[dim], maxs[dim]
+                r = seeds.copy(); r[:,dim] = 2*lo - seeds[:,dim]; mirrors_l.append(r)
+                r = seeds.copy(); r[:,dim] = 2*hi - seeds[:,dim]; mirrors_l.append(r)
+            vor_l = Voronoi(np.vstack([seeds] + mirrors_l))
+            new_seeds = seeds.copy()
+            for i in range(len(seeds)):
+                region = vor_l.regions[vor_l.point_region[i]]
+                if -1 in region or len(region) == 0:
+                    continue
+                centroid = vor_l.vertices[region].mean(axis=0)
+                new_seeds[i] = np.clip(centroid, safe_mins, safe_maxs)
+            seeds = new_seeds
+            _prog(f"Voronoi: Lloyd pass {_iter+1}/{lloyd_iterations}...")
 
     # Mirror seeds to force finite ridges at boundaries
     mirrors = []
@@ -591,26 +619,17 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
     # B: manifolds + shell
     part_m  = _to_manifold(sv, sf)
     inner_m = _to_manifold(iv, ifc)
-    _log.debug(f"shell: part vol={part_m.volume():.1f}, inner raw={inner_m.volume():.1f}")
+    _log.debug(f"shell: part vol={part_m.volume():.1f}, inner vol={inner_m.volume():.1f}")
 
-    # mcOffsetMesh can return inverted normals. Flip if volume <= 0.
-    if inner_m.is_empty() or inner_m.volume() <= 0:
+    # mcOffsetMesh returns a properly oriented mesh (positive volume = outward normals).
+    # Only flip if completely empty — do NOT flip based on volume sign alone,
+    # as incorrect flipping corrupts the subsequent boolean operations.
+    if inner_m.is_empty():
         inner_m = _to_manifold(iv, ifc[:, [0,2,1]].astype(np.int32))
-        _log.debug(f"shell: flipped inner (was <=0), vol={inner_m.volume():.1f}")
+        _log.debug(f"shell: inner was empty, flipped, vol={inner_m.volume():.1f}")
 
     shell_m = part_m - inner_m
     _log.debug(f"shell: shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
-
-    # If shell is empty or less than 1% of part volume, the winding was still
-    # wrong — flip inner_m and retry.
-    min_shell_vol = part_m.volume() * 0.01
-    if shell_m.is_empty() or shell_m.num_tri() == 0 or shell_m.volume() < min_shell_vol:
-        _log.debug(f"shell: shell empty/tiny, retrying with flipped inner_m")
-        inner_m = _to_manifold(iv, ifc[:, [0,2,1]].astype(np.int32))
-        _log.debug(f"shell: flipped inner_m vol={inner_m.volume():.1f}")
-        shell_m = part_m - inner_m
-        _log.debug(f"shell: retry shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
-
     _prog(f"Shell: {shell_m.num_tri()} tris, vol={shell_m.volume():.0f}")
 
     if shell_m.is_empty() or shell_m.num_tri() == 0:
@@ -623,11 +642,14 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
 
     if is_voronoi:
         strut_radius = max(float(strut_diameter) / 2.0, 0.05)
-        _prog(f"Generating Voronoi inside cavity (d={strut_diameter:.2f}mm, seeds={n_seeds})...")
-        tv, tf = _build_voronoi_mesh(
-            mins_i, maxs_i, strut_radius, int(n_seeds),
-            shell_off=False, part_manifold=inner_m, progress_cb=_prog
-        )
+        if lattice_type == "Voronoi (Structure)":
+            _prog(f"Generating Voronoi (Structure) inside cavity (d={strut_diameter:.2f}mm)...")
+            tv, tf = _build_voronoi_mesh_lloyd(mins_i, maxs_i, strut_radius, int(n_seeds),
+                                               shell_off=False, part_manifold=inner_m, progress_cb=_prog)
+        else:
+            _prog(f"Generating Voronoi (Random) inside cavity (d={strut_diameter:.2f}mm)...")
+            tv, tf = _build_voronoi_mesh_random(mins_i, maxs_i, strut_radius, int(n_seeds),
+                                                shell_off=False, part_manifold=inner_m, progress_cb=_prog)
         _prog(f"Voronoi: {len(tf)} faces")
         _check()
         lattice_m = _to_manifold(tv, tf)
@@ -640,12 +662,7 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
 
         # D: clip to inner cavity
         tpms_m = _to_manifold(tv, tf)
-        # The +1.0 boundary sealing can produce inconsistent cap normals,
-        # giving tpms_m a negative volume. Flip winding if so — the
-        # intersection with inner_m requires tpms_m to have positive volume.
-        if tpms_m.is_empty() or tpms_m.volume() <= 0:
-            tpms_m = _to_manifold(tv, tf[:, [0,2,1]].astype(np.int32))
-            _log.debug(f"shell: flipped tpms_m, vol now={tpms_m.volume():.1f}")
+        _log.debug(f"shell: tpms_m vol={tpms_m.volume():.1f}, tris={tpms_m.num_tri()}")
         _prog("Clipping TPMS to inner cavity...")
         lattice_m = _manifold_intersect(tpms_m, inner_m)
         _log.debug(f"shell: clipped vol={lattice_m.volume():.1f}, tris={lattice_m.num_tri()}")
@@ -687,7 +704,7 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
     def _check():
         if cancel_flag and cancel_flag[0]: raise InterruptedError("Cancelled")
 
-    is_voronoi = lattice_type == "Voronoi"
+    is_voronoi = lattice_type in VORONOI_NAMES
 
     _prog(f"Type: {lattice_type}  Wall: {wall_thickness}mm")
     _check()
@@ -776,14 +793,14 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
 
     # ── Step 2: Generate lattice ───────────────────────────────────────────────
     if is_voronoi:
-        shell_off = bool(wall_only)   # no outer shell → sealed boundary mode
         strut_radius = max(float(strut_diameter) / 2.0, 0.05)
-        _prog(f"Generating Voronoi (d={strut_diameter:.2f}mm, seeds={n_seeds}, "
-              f"{'shell-off' if shell_off else 'shell-on'})...")
-        tv, tf = _build_voronoi_mesh(
-            mins, maxs, strut_radius, int(n_seeds),
-            shell_off, inner_m, progress_cb=_prog
-        )
+        _prog(f"Generating {lattice_type} (d={strut_diameter:.2f}mm, seeds={n_seeds}, shell-off)...")
+        if lattice_type == "Voronoi (Structure)":
+            tv, tf = _build_voronoi_mesh_lloyd(mins, maxs, strut_radius, int(n_seeds),
+                                               shell_off=True, part_manifold=inner_m, progress_cb=_prog)
+        else:
+            tv, tf = _build_voronoi_mesh_random(mins, maxs, strut_radius, int(n_seeds),
+                                                shell_off=True, part_manifold=inner_m, progress_cb=_prog)
         _prog(f"Voronoi: {len(tf)} faces")
         _check()
         inner_lattice_m = _to_manifold(tv, tf)
