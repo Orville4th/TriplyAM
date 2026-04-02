@@ -40,7 +40,7 @@ LATTICE_FNS = {
     "Schoen I-WP": _schoen_iwp,
 }
 TPMS_NAMES    = list(LATTICE_FNS.keys())
-VORONOI_NAMES = ["Voronoi"]
+VORONOI_NAMES = ["Voronoi (Random)", "Voronoi (Structure)"]
 LATTICE_NAMES = TPMS_NAMES + VORONOI_NAMES
 
 
@@ -104,9 +104,13 @@ def _manifold_intersect(a, b):
     return a ^ b
 
 
-# ── TPMS mesh builder ──────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# TPMS BUILDERS — two separate functions, DO NOT MERGE
+# _build_tpms_mesh_wall_only : wall-only/lattice-only path, PROVEN WORKING, DO NOT MODIFY
+# _build_tpms_mesh_shelled   : shell-on path only, uses -1.0 boundary sealing
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
+def _build_tpms_mesh_wall_only(mins, maxs, cell_size, infill_pct,
                      lattice_type, voxel_size, smooth_iterations=0):
     from skimage.measure import marching_cubes
     from mesh_repair import weld_vertices, remove_degenerate
@@ -176,7 +180,72 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     return lv, lf
 
 
-# ── Voronoi lattice builder ────────────────────────────────────────────────────
+
+def _build_tpms_mesh_shelled(mins, maxs, cell_size, infill_pct,
+                              lattice_type, voxel_size, smooth_iterations=0):
+    """
+    TPMS mesh for shell-on mode ONLY. DO NOT USE for wall_only path.
+    Boundary sealed as solid (-1.0) → open mesh → correct for intersection
+    with inner_m (which is already a closed positive-volume manifold).
+    The inner_m clips the open TPMS to the cavity cleanly.
+    """
+    from skimage.measure import marching_cubes
+    from mesh_repair import weld_vertices, remove_degenerate
+
+    fn = LATTICE_FNS.get(lattice_type, _gyroid)
+    infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
+
+    pad = cell_size
+    origin = mins - pad
+    extent = (maxs - mins) + 2*pad
+
+    nx = max(4, int(np.ceil(extent[0]/voxel_size)))
+    ny = max(4, int(np.ceil(extent[1]/voxel_size)))
+    nz = max(4, int(np.ceil(extent[2]/voxel_size)))
+
+    xs = origin[0] + np.arange(nx)*voxel_size
+    ys = origin[1] + np.arange(ny)*voxel_size
+    zs = origin[2] + np.arange(nz)*voxel_size
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+    field = fn(X, Y, Z, cell_size)
+
+    interior = field[1:-1, 1:-1, 1:-1]
+    iso_level = float(np.percentile(interior, (1.0 - infill) * 100.0))
+    sdf = (iso_level - field).astype(np.float32)
+
+    # Seal as solid (-1.0) → open mesh. For shell-on, inner_m is a closed
+    # positive-volume manifold, so intersecting an open TPMS with it works correctly.
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
+
+    if sdf.min() >= 0:
+        raise ValueError(f"Infill {infill_pct:.0f}% too low — try increasing above 5%.")
+    if sdf.max() <= 0:
+        raise ValueError(f"Infill {infill_pct:.0f}% too high — model would be solid.")
+
+    lv, lf, _, _ = marching_cubes(sdf, level=0.0,
+                                   spacing=(voxel_size, voxel_size, voxel_size))
+    lv[:,0]+=origin[0]; lv[:,1]+=origin[1]; lv[:,2]+=origin[2]
+    lv, lf = weld_vertices(lv.astype(np.float32), lf.astype(np.int32))
+    lf = remove_degenerate(lv, lf)
+
+    if smooth_iterations > 0:
+        import pyvista as pv
+        faces_pv = np.hstack([np.full((len(lf),1),3), lf]).astype(np.int32)
+        mesh = pv.PolyData(lv, faces_pv)
+        mesh = mesh.smooth(n_iter=int(smooth_iterations*20),
+                           relaxation_factor=0.1, feature_angle=30.0)
+        lv = np.array(mesh.points, dtype=np.float32)
+        lf = mesh.faces.reshape(-1,4)[:,1:].astype(np.int32)
+
+    return lv, lf
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VORONOI BUILDERS — two separate functions, DO NOT MERGE
+# _build_voronoi_mesh_random : Voronoi (Random) — pure random seeds, organic
+# _build_voronoi_mesh_lloyd  : Voronoi (Structure) — Lloyd-relaxed, uniform cells
+# Both call _build_voronoi_mesh_impl internally.
+# ══════════════════════════════════════════════════════════════════════════════
 
 def _cylinder_mesh(p0, p1, radius, segments=8):
     """Capped cylinder between two 3D points. Low segments for fast boolean union."""
@@ -210,16 +279,28 @@ def _cylinder_mesh(p0, p1, radius, segments=8):
     return verts, np.array(faces, dtype=np.int32)
 
 
-def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
-                        part_manifold, progress_cb=None):
+
+def _build_voronoi_mesh_random(mins, maxs, strut_radius, n_seeds, shell_off,
+                                part_manifold, progress_cb=None):
+    """Voronoi (Random): pure random seed scatter — organic, irregular cell sizes."""
+    return _build_voronoi_mesh_impl(mins, maxs, strut_radius, n_seeds, shell_off,
+                                    part_manifold, lloyd_iterations=0,
+                                    progress_cb=progress_cb)
+
+
+def _build_voronoi_mesh_lloyd(mins, maxs, strut_radius, n_seeds, shell_off,
+                               part_manifold, progress_cb=None):
+    """Voronoi (Structure): Lloyd-relaxed seeds — uniform cell sizes, structured look."""
+    return _build_voronoi_mesh_impl(mins, maxs, strut_radius, n_seeds, shell_off,
+                                    part_manifold, lloyd_iterations=8,
+                                    progress_cb=progress_cb)
+
+
+def _build_voronoi_mesh_impl(mins, maxs, strut_radius, n_seeds, shell_off,
+                              part_manifold, lloyd_iterations=0, progress_cb=None):
     """
-    Voronoi strut lattice clipped to part_manifold.
-
-    shell_off=False (Shell-on):  arms reach wall naturally.
-    shell_off=True  (Shell-off): + boundary nodes connected with Y-junctions.
-
-    Key fix vs 0.3.0: edges are kept when EITHER endpoint is inside the padded
-    bbox, not both — this prevents valid near-boundary edges being discarded.
+    Core Voronoi implementation. Called by _build_voronoi_mesh_random and _build_voronoi_mesh_lloyd.
+    lloyd_iterations=0 → pure random; >0 → Lloyd relaxation passes.
     """
     from scipy.spatial import Voronoi, cKDTree
 
@@ -238,6 +319,26 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
             safe_maxs[dim] = maxs[dim]
     seeds = rng.uniform(safe_mins, safe_maxs,
                         size=(int(n_seeds), 3)).astype(np.float64)
+
+    # ── Lloyd relaxation (0 = random, 8 = structured) ────────────────────────
+    if lloyd_iterations > 0:
+        _prog(f"Voronoi: Lloyd relaxation ({lloyd_iterations} passes)...")
+        for _iter in range(lloyd_iterations):
+            mirrors_l = []
+            for dim in range(3):
+                lo, hi = mins[dim], maxs[dim]
+                r = seeds.copy(); r[:,dim] = 2*lo - seeds[:,dim]; mirrors_l.append(r)
+                r = seeds.copy(); r[:,dim] = 2*hi - seeds[:,dim]; mirrors_l.append(r)
+            vor_l = Voronoi(np.vstack([seeds] + mirrors_l))
+            new_seeds = seeds.copy()
+            for i in range(len(seeds)):
+                region = vor_l.regions[vor_l.point_region[i]]
+                if -1 in region or len(region) == 0:
+                    continue
+                centroid = vor_l.vertices[region].mean(axis=0)
+                new_seeds[i] = np.clip(centroid, safe_mins, safe_maxs)
+            seeds = new_seeds
+            _prog(f"Voronoi: Lloyd pass {_iter+1}/{lloyd_iterations}...")
 
     # Mirror seeds to force finite ridges at boundaries
     mirrors = []
@@ -623,18 +724,25 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
 
     if is_voronoi:
         strut_radius = max(float(strut_diameter) / 2.0, 0.05)
-        _prog(f"Generating Voronoi inside cavity (d={strut_diameter:.2f}mm, seeds={n_seeds})...")
-        tv, tf = _build_voronoi_mesh(
-            mins_i, maxs_i, strut_radius, int(n_seeds),
-            shell_off=False, part_manifold=inner_m, progress_cb=_prog
-        )
+        if lattice_type == "Voronoi (Structure)":
+            _prog(f"Generating Voronoi (Structure) inside cavity (d={strut_diameter:.2f}mm)...")
+            tv, tf = _build_voronoi_mesh_lloyd(
+                mins_i, maxs_i, strut_radius, int(n_seeds),
+                shell_off=False, part_manifold=inner_m, progress_cb=_prog
+            )
+        else:
+            _prog(f"Generating Voronoi (Random) inside cavity (d={strut_diameter:.2f}mm)...")
+            tv, tf = _build_voronoi_mesh_random(
+                mins_i, maxs_i, strut_radius, int(n_seeds),
+                shell_off=False, part_manifold=inner_m, progress_cb=_prog
+            )
         _prog(f"Voronoi: {len(tf)} faces")
         _check()
         lattice_m = _to_manifold(tv, tf)
     else:
         _prog(f"Generating {lattice_type} ({infill_pct:.0f}% infill) inside cavity...")
-        tv, tf = _build_tpms_mesh(mins_i, maxs_i, cell_size, infill_pct,
-                                   lattice_type, voxel_size, smooth_iterations)
+        tv, tf = _build_tpms_mesh_shelled(mins_i, maxs_i, cell_size, infill_pct,
+                                           lattice_type, voxel_size, smooth_iterations)
         _prog(f"TPMS: {len(tf)} faces")
         _check()
 
@@ -681,7 +789,7 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
     def _check():
         if cancel_flag and cancel_flag[0]: raise InterruptedError("Cancelled")
 
-    is_voronoi = lattice_type == "Voronoi"
+    is_voronoi = lattice_type in VORONOI_NAMES
 
     _prog(f"Type: {lattice_type}  Wall: {wall_thickness}mm")
     _check()
@@ -770,22 +878,26 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
 
     # ── Step 2: Generate lattice ───────────────────────────────────────────────
     if is_voronoi:
-        shell_off = bool(wall_only)   # no outer shell → sealed boundary mode
         strut_radius = max(float(strut_diameter) / 2.0, 0.05)
-        _prog(f"Generating Voronoi (d={strut_diameter:.2f}mm, seeds={n_seeds}, "
-              f"{'shell-off' if shell_off else 'shell-on'})...")
-        tv, tf = _build_voronoi_mesh(
-            mins, maxs, strut_radius, int(n_seeds),
-            shell_off, inner_m, progress_cb=_prog
-        )
+        _prog(f"Generating {lattice_type} (d={strut_diameter:.2f}mm, seeds={n_seeds}, shell-off)...")
+        if lattice_type == "Voronoi (Structure)":
+            tv, tf = _build_voronoi_mesh_lloyd(
+                mins, maxs, strut_radius, int(n_seeds),
+                shell_off=True, part_manifold=inner_m, progress_cb=_prog
+            )
+        else:
+            tv, tf = _build_voronoi_mesh_random(
+                mins, maxs, strut_radius, int(n_seeds),
+                shell_off=True, part_manifold=inner_m, progress_cb=_prog
+            )
         _prog(f"Voronoi: {len(tf)} faces")
         _check()
         inner_lattice_m = _to_manifold(tv, tf)
 
     else:
         _prog(f"Generating {lattice_type} ({infill_pct:.0f}% infill)...")
-        tv, tf = _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
-                                   lattice_type, voxel_size, smooth_iterations)
+        tv, tf = _build_tpms_mesh_wall_only(mins, maxs, cell_size, infill_pct,
+                                              lattice_type, voxel_size, smooth_iterations)
         _prog(f"TPMS: {len(tf)} faces")
         _check()
 
