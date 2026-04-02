@@ -547,6 +547,110 @@ def _remove_small_components(verts, faces, min_fraction=0.01):
     return new_verts.astype(np.float32), new_faces_remapped.astype(np.int32)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# SHELL-ON PIPELINE — completely separate from wall_only path.
+# DO NOT MERGE with generate_lattice wall_only flow.
+# DO NOT MODIFY the wall_only path in generate_lattice below.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
+                             infill_pct, lattice_type, voxel_size,
+                             smooth_iterations, strut_diameter, n_seeds,
+                             is_voronoi, progress_cb, cancel_flag):
+    """
+    Shell-on lattice: outer wall + lattice infill inside cavity.
+    Entirely separate from the wall_only path which must not be touched.
+
+    Pipeline:
+      A. MeshLib offset → inner cavity mesh
+      B. Build manifolds, correct normal orientation, compute shell
+      C. Generate TPMS/Voronoi over inner cavity bounds
+      D. Clip lattice to inner cavity
+      E. Union shell + lattice → return final Manifold
+    """
+    import meshlib.mrmeshpy as mr
+
+    def _prog(msg):
+        if progress_cb: progress_cb(msg)
+    def _check():
+        if cancel_flag and cancel_flag[0]: raise InterruptedError("Cancelled")
+
+    wt = float(wall_thickness)
+
+    # ── A: inner cavity via MeshLib inward offset ─────────────────────────────
+    _prog(f"Computing shell offset ({wt}mm)...")
+    part_mr = _to_mr(sv, sf)
+    op = mr.OffsetParameters()
+    op.voxelSize = min((voxel_size if not is_voronoi else 0.2), 0.2)
+    inner_mr = mr.mcOffsetMesh(mr.MeshPart(part_mr), -wt, op)
+    iv, ifc = _from_mr(inner_mr)
+    _prog(f"Inner cavity: {len(ifc)} faces")
+    _check()
+
+    # ── B: manifolds + shell ──────────────────────────────────────────────────
+    part_m  = _to_manifold(sv, sf)
+    inner_m = _to_manifold(iv, ifc)
+
+    _log.debug(f"shell_pipeline: part vol={part_m.volume():.1f}, "
+               f"inner vol raw={inner_m.volume():.1f}")
+
+    # mcOffsetMesh frequently returns inverted normals → negative volume.
+    # Flip winding until we have a positive-volume closed manifold.
+    if inner_m.is_empty() or inner_m.volume() <= 0:
+        inner_m = _to_manifold(iv, ifc[:, [0, 2, 1]].astype(np.int32))
+        _log.debug(f"shell_pipeline: flipped inner, vol now={inner_m.volume():.1f}")
+
+    shell_m = part_m - inner_m
+    _log.debug(f"shell_pipeline: shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
+    _prog(f"Shell: {shell_m.num_tri()} tris, vol={shell_m.volume():.0f}")
+
+    if shell_m.is_empty() or shell_m.num_tri() == 0:
+        raise ValueError(
+            "Shell mesh is empty — wall thickness may be too large for this part."
+        )
+    _check()
+
+    # ── C: generate lattice bounded to inner cavity ───────────────────────────
+    mins_i = iv.min(axis=0).astype(np.float64)
+    maxs_i = iv.max(axis=0).astype(np.float64)
+
+    if is_voronoi:
+        strut_radius = max(float(strut_diameter) / 2.0, 0.05)
+        _prog(f"Generating Voronoi inside cavity "
+              f"(d={strut_diameter:.2f}mm, seeds={n_seeds})...")
+        tv, tf = _build_voronoi_mesh(
+            mins_i, maxs_i, strut_radius, int(n_seeds),
+            shell_off=False, part_manifold=inner_m, progress_cb=_prog
+        )
+        _prog(f"Voronoi: {len(tf)} faces")
+        _check()
+        lattice_m = _to_manifold(tv, tf)
+    else:
+        _prog(f"Generating {lattice_type} ({infill_pct:.0f}% infill) inside cavity...")
+        tv, tf = _build_tpms_mesh(mins_i, maxs_i, cell_size, infill_pct,
+                                   lattice_type, voxel_size, smooth_iterations)
+        _prog(f"TPMS: {len(tf)} faces")
+        _check()
+
+        # ── D: clip to inner cavity ───────────────────────────────────────────
+        tpms_m = _to_manifold(tv, tf)
+        _prog("Clipping TPMS to inner cavity...")
+        lattice_m = _manifold_intersect(tpms_m, inner_m)
+        _log.debug(f"shell_pipeline: clipped vol={lattice_m.volume():.1f}, "
+                   f"tris={lattice_m.num_tri()}")
+        _prog(f"Clipped: {lattice_m.num_tri()} tris, vol={lattice_m.volume():.0f}")
+        _check()
+
+    # ── E: union shell + lattice ──────────────────────────────────────────────
+    _prog("Combining shell + lattice...")
+    final_m = shell_m + lattice_m
+    _log.debug(f"shell_pipeline: final vol={final_m.volume():.1f}, tris={final_m.num_tri()}")
+    _prog(f"Final: {final_m.num_tri()} tris, vol={final_m.volume():.0f}")
+    _check()
+
+    return final_m
+
+
 # ── Main pipeline ──────────────────────────────────────────────────────────────
 
 def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
@@ -601,9 +705,38 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
         else:
             voxel_size = float(np.clip(np.max(span)/resolution, 0.05, 1.0))
         _prog(f"Voxel size: {voxel_size:.3f}mm")
+    else:
+        voxel_size = 0.2  # not used for Voronoi but needed by shell pipeline
+
+    # ── Shell-on: delegate entirely to separate pipeline ──────────────────────
+    # The wall_only path below is PROVEN WORKING — do not touch it.
+    # All shell-on work happens in _generate_shell_lattice exclusively.
+    wt = float(wall_thickness)
+    if wt > 0 and not wall_only:
+        final_m = _generate_shell_lattice(
+            sv, sf, mins, maxs, wt, cell_size, infill_pct,
+            lattice_type, voxel_size, smooth_iterations,
+            strut_diameter, n_seeds, is_voronoi, _prog, cancel_flag
+        )
+        _prog("Extracting mesh...")
+        rv, rf = _from_manifold(final_m)
+        _prog("Removing floating geometry...")
+        rv, rf = _remove_small_components(rv, rf)
+        from collections import defaultdict
+        ec = defaultdict(int)
+        for tri in rf:
+            for i in range(3):
+                a, b = int(tri[i]), int(tri[(i+1)%3])
+                ec[(min(a,b), max(a,b))] += 1
+        nm = sum(1 for x in ec.values() if x != 2)
+        _prog(f"Done! {len(rv)} verts, {len(rf)} faces — {nm} non-manifold edges")
+        return rv.astype(np.float32), rf.astype(np.int32)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # WALL-ONLY PATH — do not modify. This path is proven working.
+    # ══════════════════════════════════════════════════════════════════════════
 
     # ── Step 1: MeshLib shell offset ───────────────────────────────────────────
-    wt = float(wall_thickness)
     part_mr = _to_mr(sv, sf)
     part_m  = _to_manifold(sv, sf)
 
