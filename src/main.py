@@ -652,9 +652,9 @@ class TripLyWindow(QMainWindow):
         pf = QFormLayout(); pf.setSpacing(6)
         self.sp_wall  = StepSpin(0.0, 20.0, 1.5, 0.1)
         self.sp_cell  = StepSpin(2.0, 50.0, 8.0, 0.5)
-        self.sp_infill = StepSpin(1.0, 99.0, 40.0, 1.0)
+        self.sp_infill = StepSpin(1.0, 99.0, 20.0, 1.0)
         self.sp_infill.spin.setSuffix(" %")
-        self.sp_strut  = StepSpin(0.1, 20.0, 2.0, 0.1)
+        self.sp_strut  = StepSpin(0.1, 20.0, 1.5, 0.1)
         self.sp_strut.spin.setSuffix(" mm")
         self.sp_seeds  = StepSpin(50, 2000, 300, 50)
         self.sp_seeds.spin.setSuffix("")
@@ -715,6 +715,10 @@ class TripLyWindow(QMainWindow):
         self.lat_prog.setRange(0,100); self.lat_prog.setValue(0)
         self.lat_prog.setTextVisible(True); self.lat_prog.setFormat("%p%")
         lay.addWidget(self.lat_prog)
+        self.lat_status = QLabel(""); self.lat_status.setVisible(False)
+        self.lat_status.setStyleSheet("color:#aaa;font-size:10px;padding:2px 0;")
+        self.lat_status.setWordWrap(True)
+        lay.addWidget(self.lat_status)
         btn_cancel_lat = QPushButton("Cancel"); btn_cancel_lat.setObjectName("btn_danger")
         btn_cancel_lat.clicked.connect(lambda: self._cancel_flag.__setitem__(0,True))
         btn_cancel_lat.setVisible(False); self._btn_cancel_lat = btn_cancel_lat
@@ -1706,7 +1710,13 @@ class TripLyWindow(QMainWindow):
             for i in range(pi.childCount()-1,-1,-1):
                 c=pi.child(i)
                 if c.data(0,Qt.ItemDataRole.UserRole)=='__lattice__': pi.removeChild(c)
-            li=QTreeWidgetItem([f"    ◈ {self.combo_ltype.currentText()}"])
+            ltype_str = self.combo_ltype.currentText()
+            is_voronoi = (ltype_str == "Voronoi")
+            if is_voronoi:
+                param_str = f"d={self.sp_strut.value():.1f}mm, {int(self.sp_seeds.value())} seeds"
+            else:
+                param_str = f"{int(self.sp_infill.value())}% infill"
+            li=QTreeWidgetItem([f"    ◈ {ltype_str} ({param_str})"])
             li.setData(0,Qt.ItemDataRole.UserRole,'__lattice__')
             li.setFlags(Qt.ItemFlag.NoItemFlags)
             li.setForeground(0,QColor(ACCENT))

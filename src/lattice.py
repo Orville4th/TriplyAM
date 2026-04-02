@@ -281,12 +281,13 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
 
     # ── Extract edges ──────────────────────────────────────────────────────────
     # Keep ridges where BOTH seed points are original (index < n_orig).
-    # Additionally filter by midpoint: drop edges whose midpoint lies well outside
-    # the bbox — these produce stray floating struts after clipping.
+    # Filter by midpoint (stray struts) and by edge length (overlong/degenerate).
+    # Overlong edges create crossing struts and messy junctions; too-short edges
+    # create needle geometry that manifold3d struggles to boolean correctly.
     _prog("Voronoi: extracting edges...")
     n_orig = len(seeds)
     vv = vor.vertices
-    edges = []
+    raw_edges = []
     skipped_infinite = 0
     skipped_mirror = 0
     skipped_outside = 0
@@ -306,11 +307,28 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         if np.any(mid < mins - mid_pad) or np.any(mid > maxs + mid_pad):
             skipped_outside += 1
             continue
+        raw_edges.append((pa, pb))
+
+    # ── Edge-length filter ─────────────────────────────────────────────────────
+    # Expected avg cell spacing based on bbox volume and seed count
+    bbox_vol  = float(np.prod(maxs - mins))
+    avg_spacing = (bbox_vol / max(n_seeds, 1)) ** (1.0 / 3.0)
+    min_len   = strut_radius * 2.0          # shorter than diameter → degenerate
+    max_len   = avg_spacing * 3.5           # longer than 3.5× cell → crossing strut
+
+    edges = []
+    skipped_len = 0
+    for pa, pb in raw_edges:
+        length = float(np.linalg.norm(pb - pa))
+        if length < min_len or length > max_len:
+            skipped_len += 1
+            continue
         edges.append((pa, pb))
 
     _log.debug(f"Voronoi edges: {len(edges)} kept, "
                f"{skipped_infinite} infinite skipped, {skipped_mirror} mirror skipped, "
-               f"{skipped_outside} outside skipped")
+               f"{skipped_outside} outside skipped, {skipped_len} length-filtered "
+               f"(min={min_len:.2f} max={max_len:.2f})")
 
     # ── Add bounding-box edge-frame struts ────────────────────────────────────
     # Build 12 struts along every edge of the part bbox so internal Voronoi
@@ -328,7 +346,7 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
                   (0,4),(1,5),(2,6),(3,7)]   # verticals
     frame_manifolds = []
     for i0, i1 in bbox_edges:
-        cv, cf = _cylinder_mesh(corners[i0], corners[i1], strut_radius, segments=12)
+        cv, cf = _cylinder_mesh(corners[i0], corners[i1], strut_radius, segments=16)
         if len(cf) == 0:
             continue
         try:
@@ -360,7 +378,7 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
         batch = edges[batch_start: batch_start + BATCH]
         batch_manifolds = []
         for p0, p1 in batch:
-            cv, cf = _cylinder_mesh(p0, p1, strut_radius, segments=12)
+            cv, cf = _cylinder_mesh(p0, p1, strut_radius, segments=16)
             if len(cf) == 0:
                 cyl_fail += 1
                 continue
@@ -459,7 +477,7 @@ def _build_voronoi_mesh(mins, maxs, strut_radius, n_seeds, shell_off,
                     if d <= d_near + YJUNC_TOL:
                         to_connect.append(j)
                 for j in to_connect:
-                    cv, cf = _cylinder_mesh(bn[i], bn[j], strut_radius, segments=12)
+                    cv, cf = _cylinder_mesh(bn[i], bn[j], strut_radius, segments=16)
                     if len(cf) == 0:
                         continue
                     try:
