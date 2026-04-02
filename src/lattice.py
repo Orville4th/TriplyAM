@@ -113,12 +113,7 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
 
     fn = LATTICE_FNS.get(lattice_type, _gyroid)
 
-    # solid = where |field| < threshold.
-    # Confirmed by user: high infill_pct was producing sparse results.
-    # Fix: invert so high % → low threshold_frac → small threshold → more of the
-    # field counts as solid (the gyroid surface band is near field_max, not zero).
     infill = float(np.clip(infill_pct, 1.0, 99.0)) / 100.0
-    threshold_frac = 1.0 - infill  # 70% → threshold=0.30*field_max → dense ✓
 
     pad = cell_size
     origin = mins - pad
@@ -134,20 +129,17 @@ def _build_tpms_mesh(mins, maxs, cell_size, infill_pct,
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     field = fn(X, Y, Z, cell_size)
 
-    field_abs = np.abs(field)
-    field_max = float(field_abs.max())
-    if field_max < 1e-6:
-        field_max = 1.0
+    # Percentile-based isovalue: solid = field > iso_level.
+    # np.percentile(field, 100-infill%) gives the exact iso so that
+    # infill% of voxels are above it — works correctly for all surface
+    # types (Gyroid, Schwarz P/D, Schoen I-WP) without any per-type logic.
+    iso_level = float(np.percentile(field, (1.0 - infill) * 100.0))
 
-    threshold = threshold_frac * field_max
-    threshold = max(threshold, field_max * 0.005)
-    threshold = min(threshold, field_max * 0.98)
+    # sdf < 0 = solid (field > iso), sdf > 0 = void
+    sdf = (iso_level - field).astype(np.float32)
 
-    # sdf < 0 = solid wall material, sdf > 0 = void
-    sdf = (field_abs - threshold).astype(np.float32)
-
-    # Seal boundaries as void
-    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=-1.0
+    # Seal boundaries as void so marching cubes sees open space at bbox edges
+    sdf[0,:,:]=sdf[-1,:,:]=sdf[:,0,:]=sdf[:,-1,:]=sdf[:,:,0]=sdf[:,:,-1]=1.0
 
     if sdf.min() >= 0:
         raise ValueError(
