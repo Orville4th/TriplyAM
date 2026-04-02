@@ -613,7 +613,10 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
         _check()
 
         inner_m = _to_manifold(iv, ifc)
-        if inner_m.is_empty():
+        # mcOffsetMesh frequently returns a mesh with inverted normals (negative
+        # volume). Flip face winding to correct orientation whenever that happens.
+        # The old guard only flipped on is_empty() which misses the negative-volume case.
+        if inner_m.is_empty() or inner_m.volume() < 0:
             inner_m = _to_manifold(iv, ifc[:,[0,2,1]].astype(np.int32))
 
         _prog(f"Part vol={part_m.volume():.0f}, Inner vol={inner_m.volume():.0f}")

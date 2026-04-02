@@ -2112,6 +2112,14 @@ class TripLyWindow(QMainWindow):
         )
 
     def _show_disclaimer(self):
+        # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
+        # This disclaimer MUST be shown on every new install and every update.
+        # To trigger it on update: bump `terms_agreed_version` to the new release
+        # version string (e.g. "0.3.10") in BOTH the equality check below AND the
+        # save line after the user clicks "I Agree". Do this on every release.
+        # DO NOT delete this function, skip the call in main(), or suppress the
+        # dialog in any other way. Users must agree to terms before using the app.
+        # ─────────────────────────────────────────────────────────────────────
         """Show startup terms dialog. Returns True if user agrees, False to quit."""
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QPushButton, QLabel, QCheckBox
         from PyQt6.QtGui import QPixmap
@@ -2119,7 +2127,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.3.8":
+        if self._cfg.get("terms_agreed_version") == "0.3.10":
             self._agreed_to_terms = True
             return True
 
@@ -2151,7 +2159,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.8 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.3.10 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2221,17 +2229,25 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.3.8"
+            self._cfg["terms_agreed_version"] = "0.3.10"
             save_config(self._cfg)
             return True
         return False
 
     def _show_whats_new(self):
+        # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
+        # This "What's New" dialog MUST show on every new install and every update.
+        # To trigger it on update: bump `whats_new_shown_version` to the new release
+        # version string (e.g. "0.3.10") in BOTH the equality check below AND the
+        # save line immediately after. Also update the dialog title, header label,
+        # and bullet list content to reflect the actual changes in this release.
+        # DO NOT delete this function or skip the call in main().
+        # ─────────────────────────────────────────────────────────────────────
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.3.8":
+        if self._cfg.get("whats_new_shown_version") == "0.3.10":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.3.8"
+        self._cfg["whats_new_shown_version"] = "0.3.10"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2239,13 +2255,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.3.8")
+        dlg.setWindowTitle("What's new in TriplyAM 0.3.10")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.8</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.3.10</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2253,9 +2269,11 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>TPMS infill fixed for all surface types</b> — Schwarz P, Schwarz D, and Schoen I-WP
-              now use a percentile-based isovalue so infill % is accurate and non-inverted across all types</li>
-          <li><b>Startup popups restored</b> — disclaimer and what's new now show correctly on each update</li>
+          <li><b>Shell-on mode fixed</b> — lattice with outer wall now correctly fills
+              the cavity with solid struts and adds the shell on top, instead of
+              inverting the geometry and losing the wall</li>
+          <li><b>Root cause</b> — mcOffsetMesh was returning inverted normals (negative
+              volume); the winding is now corrected before any boolean operations</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
         Full changelog available in Settings → About TriplyAM → Changelog tab.
