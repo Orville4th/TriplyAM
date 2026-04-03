@@ -1977,7 +1977,7 @@ class TripLyWindow(QMainWindow):
         return path
 
     def _run_export(self, path, verts, faces):
-        if not _os.path.splitext(path)[1]: path += '.3mf'  # default to .3mf
+        if not _os.path.splitext(path)[1]: path += '.3mf'
         q_map={"Low (0.5mm)":"Low","Medium (0.1mm)":"Medium","High (0.001mm)":"High"}
         quality=q_map.get(self.combo_quality.currentText(),"High")
         if hasattr(self,'exp_prog'):
@@ -2137,7 +2137,7 @@ class TripLyWindow(QMainWindow):
         # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
         # This disclaimer MUST be shown on every new install and every update.
         # To trigger it on update: bump `terms_agreed_version` to the new release
-        # version string (e.g. "0.4.5") in BOTH the equality check below AND the
+        # version string (e.g. "0.4.6") in BOTH the equality check below AND the
         # save line after the user clicks "I Agree". Do this on every release.
         # DO NOT delete this function, skip the call in main(), or suppress the
         # dialog in any other way. Users must agree to terms before using the app.
@@ -2149,7 +2149,7 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         # Check if already agreed in this config
-        if self._cfg.get("terms_agreed_version") == "0.4.5":
+        if self._cfg.get("terms_agreed_version") == "0.4.6":
             self._agreed_to_terms = True
             return True
 
@@ -2181,7 +2181,7 @@ class TripLyWindow(QMainWindow):
         hdr_row.addWidget(icon_lbl)
         hdr_lbl = QLabel(
             "<b style='font-size:15px;'>TriplyAM — AM Tools and Lattices</b>"
-            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.4.5 Beta</span>"
+            "<br><span style='color:#888;font-size:12px;'>Open Source Software &nbsp;·&nbsp; v0.4.6 Beta</span>"
         )
         hdr_lbl.setWordWrap(True)
         hdr_row.addWidget(hdr_lbl, 1)
@@ -2251,7 +2251,7 @@ class TripLyWindow(QMainWindow):
         result = dlg.exec()
         if result == QDialog.DialogCode.Accepted and chk.isChecked():
             self._agreed_to_terms = True
-            self._cfg["terms_agreed_version"] = "0.4.5"
+            self._cfg["terms_agreed_version"] = "0.4.6"
             save_config(self._cfg)
             return True
         return False
@@ -2260,16 +2260,16 @@ class TripLyWindow(QMainWindow):
         # ── IMPORTANT — DO NOT REMOVE OR DISABLE THIS POPUP ──────────────────
         # This "What's New" dialog MUST show on every new install and every update.
         # To trigger it on update: bump `whats_new_shown_version` to the new release
-        # version string (e.g. "0.4.5") in BOTH the equality check below AND the
+        # version string (e.g. "0.4.6") in BOTH the equality check below AND the
         # save line immediately after. Also update the dialog title, header label,
         # and bullet list content to reflect the actual changes in this release.
         # DO NOT delete this function or skip the call in main().
         # ─────────────────────────────────────────────────────────────────────
         """Show what's new in this version — only once per version."""
-        if self._cfg.get("whats_new_shown_version") == "0.4.5":
+        if self._cfg.get("whats_new_shown_version") == "0.4.6":
             return
         # Mark as shown for this version
-        self._cfg["whats_new_shown_version"] = "0.4.5"
+        self._cfg["whats_new_shown_version"] = "0.4.6"
         save_config(self._cfg)
         from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTextBrowser, QDialogButtonBox, QLabel
         from PyQt6.QtGui import QPixmap
@@ -2277,13 +2277,13 @@ class TripLyWindow(QMainWindow):
         import os as _os
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("What's new in TriplyAM 0.4.5")
+        dlg.setWindowTitle("What's new in TriplyAM 0.4.6")
         dlg.setMinimumWidth(480)
         dlg.setMinimumHeight(400)
         lay = QVBoxLayout(dlg)
         lay.setSpacing(10)
 
-        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.4.5</b>")
+        hdr = QLabel("<b style='font-size:14px;'>What's new in 0.4.6</b>")
         lay.addWidget(hdr)
 
         tb = QTextBrowser()
@@ -2291,9 +2291,9 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>Shell-on fixed</b> — correct outer shell with lattice infill inside</li>
-          <li><b>Crash log</b> — automatically saved to ~/Downloads/triplyam-crash.log</li>
-          <li><b>Export Debug Log</b> — button in Export tab for diagnosis</li>
+          <li><b>Shell-on fixed</b> — outer shell and TPMS lattice now generate correctly</li>
+          <li><b>Crash log</b> — crashes saved to ~/Downloads/triplyam-crash.log</li>
+          <li><b>Export Debug Log</b> — button in Export tab</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
         Full changelog available in Settings → About TriplyAM → Changelog tab.
@@ -2381,13 +2381,14 @@ class TripLyWindow(QMainWindow):
 
         <!-- !! UPDATE THIS CHANGELOG ON EVERY RELEASE — add new h3 at top !! -->
         <!-- !! UPDATE THIS CHANGELOG ON EVERY RELEASE !! -->
-        <h3>0.4.5 — Beta <span class='tag'>current</span></h3>
+        <h3>0.4.6 — Beta <span class='tag'>current</span></h3>
         <ul>
-          <li>Shell boolean fixed — part-(inner-lattice) replaces shell+lattice union; outer shell now full size</li>
-          <li>inner_m winding flip restored for mcOffsetMesh negative volume output</li>
-          <li>Crash log written to ~/Downloads/triplyam-crash.log automatically</li>
+          <li>Shell-on fixed — _remove_small_components was stripping the outer shell after generation; removed from shell-on path</li>
+          <li>void_m boolean approach: part-(inner-lattice) avoids flush-surface union artifacts</li>
+          <li>inner_m winding corrected for mcOffsetMesh negative volume output</li>
+          <li>Crash log also written to ~/Downloads/triplyam-crash.log</li>
           <li>Export Debug Log button in Export tab</li>
-          <li>3MF version string tracks app version (no longer hardcoded)</li>
+          <li>Disclaimer and update popups restored</li>
         </ul>
 
                 <h3>0.4.2 — Beta</h3>

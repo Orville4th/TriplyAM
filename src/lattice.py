@@ -622,7 +622,6 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
     _log.debug(f"shell: part vol={part_m.volume():.1f}, inner vol={inner_m.volume():.1f}")
 
     # mcOffsetMesh consistently returns inverted normals (negative volume).
-    # Flip when volume <= 0 so part_m - inner_m gives a hollow shell.
     # !! DO NOT REMOVE: this flip is required for correct shell boolean !!
     _log.debug(f"shell: inner_m vol before flip={inner_m.volume():.1f}")
     if inner_m.is_empty() or inner_m.volume() <= 0:
@@ -670,10 +669,9 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
         _prog(f"Clipped: {lattice_m.num_tri()} tris, vol={lattice_m.volume():.0f}")
         _check()
 
-    # E: combine via part-(inner-lattice) to avoid flush-surface union artifacts.
-    # shell_m + lattice_m clips to inner bounds because they share a flush surface.
-    # part-(inner-lattice) avoids this: remove cavity from part, keep lattice solid.
+    # E: combine via part-(inner-lattice).
     # !! DO NOT CHANGE THIS BOOLEAN APPROACH !!
+    # shell_m + lattice_m clips to inner bounds (flush surface issue).
     _prog("Combining shell + lattice...")
     void_m  = inner_m - lattice_m   # cavity with lattice solid removed
     final_m = part_m  - void_m      # part minus empty space = shell + lattice
@@ -751,8 +749,10 @@ def generate_lattice(stl_verts, wall_thickness, cell_size, infill_pct,
         )
         _prog("Extracting mesh...")
         rv, rf = _from_manifold(final_m)
-        _prog("Removing floating geometry...")
-        rv, rf = _remove_small_components(rv, rf)
+        # !! DO NOT ADD _remove_small_components HERE !!
+        # Shell-on result may have multiple components (shell + lattice struts).
+        # _remove_small_components incorrectly strips the outer shell or lattice,
+        # leaving only the void mesh. The boolean already produces a clean result.
         from collections import defaultdict
         ec = defaultdict(int)
         for tri in rf:
