@@ -621,12 +621,13 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
     inner_m = _to_manifold(iv, ifc)
     _log.debug(f"shell: part vol={part_m.volume():.1f}, inner vol={inner_m.volume():.1f}")
 
-    # mcOffsetMesh returns a properly oriented mesh (positive volume = outward normals).
-    # Only flip if completely empty — do NOT flip based on volume sign alone,
-    # as incorrect flipping corrupts the subsequent boolean operations.
-    if inner_m.is_empty():
+    # mcOffsetMesh consistently returns inverted normals (negative volume).
+    # Flip when volume <= 0 so part_m - inner_m gives a hollow shell.
+    # !! DO NOT REMOVE: this flip is required for correct shell boolean !!
+    _log.debug(f"shell: inner_m vol before flip={inner_m.volume():.1f}")
+    if inner_m.is_empty() or inner_m.volume() <= 0:
         inner_m = _to_manifold(iv, ifc[:, [0,2,1]].astype(np.int32))
-        _log.debug(f"shell: inner was empty, flipped, vol={inner_m.volume():.1f}")
+        _log.debug(f"shell: flipped inner_m, vol now={inner_m.volume():.1f}")
 
     shell_m = part_m - inner_m
     _log.debug(f"shell: shell vol={shell_m.volume():.1f}, tris={shell_m.num_tri()}")
@@ -669,13 +670,14 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
         _prog(f"Clipped: {lattice_m.num_tri()} tris, vol={lattice_m.volume():.0f}")
         _check()
 
-    # E: combine using part_m - (inner_m - lattice_m)
-    # Avoids flush-surface union of shell_m + lattice_m which causes manifold3d
-    # to clip to inner bounds. Instead: remove cavity from part, keep lattice solid.
+    # E: combine via part-(inner-lattice) to avoid flush-surface union artifacts.
+    # shell_m + lattice_m clips to inner bounds because they share a flush surface.
+    # part-(inner-lattice) avoids this: remove cavity from part, keep lattice solid.
+    # !! DO NOT CHANGE THIS BOOLEAN APPROACH !!
     _prog("Combining shell + lattice...")
-    void_m = inner_m - lattice_m      # cavity with lattice solid removed
-    final_m = part_m - void_m         # part minus empty cavity = shell + lattice
-    _log.debug(f"shell: void vol={void_m.volume():.1f}, final vol={final_m.volume():.1f}, tris={final_m.num_tri()}")
+    void_m  = inner_m - lattice_m   # cavity with lattice solid removed
+    final_m = part_m  - void_m      # part minus empty space = shell + lattice
+    _log.debug(f"shell: void_m vol={void_m.volume():.1f}, final vol={final_m.volume():.1f}, tris={final_m.num_tri()}")
     _prog(f"Final: {final_m.num_tri()} tris, vol={final_m.volume():.0f}")
     _check()
 

@@ -845,7 +845,29 @@ class TripLyWindow(QMainWindow):
         self.exp_prog.setRange(0,100); self.exp_prog.setValue(0)
         self.exp_prog.setTextVisible(True); self.exp_prog.setFormat("%p%")
         lay.addWidget(self.exp_prog)
+        # !! DO NOT REMOVE: Export Debug Log button — keep until user says remove !!
+        btn_log = QPushButton("Export Debug Log…")
+        btn_log.clicked.connect(self._export_log)
+        lay.addWidget(btn_log)
         lay.addStretch(); return w
+
+    def _export_log(self):
+        """Save debug log to user-chosen file for diagnosis upload."""
+        import shutil, os as _os
+        log_src = _os.path.join(_os.path.expanduser('~'), '.config', 'triply', 'triplyam_debug.log')
+        if not _os.path.exists(log_src):
+            QMessageBox.information(self, "Export Log", "No debug log found yet.\nGenerate a lattice first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Debug Log",
+            _os.path.join(_os.path.expanduser('~'), 'Downloads', 'triplyam_debug.log'),
+            "Log Files (*.log);;Text Files (*.txt);;All Files (*)",
+            options=QFileDialog.Option.DontUseNativeDialog
+        )
+        if not path: return
+        if not _os.path.splitext(path)[1]: path += '.log'
+        shutil.copy2(log_src, path)
+        QMessageBox.information(self, "Export Log", f"Debug log saved to:\n{path}")
 
     # ------------------------------------------------------------------
     # Key handling
@@ -1955,7 +1977,7 @@ class TripLyWindow(QMainWindow):
         return path
 
     def _run_export(self, path, verts, faces):
-        if '.' not in path.split('/')[-1]: path+='.stl'
+        if not _os.path.splitext(path)[1]: path += '.3mf'  # default to .3mf
         q_map={"Low (0.5mm)":"Low","Medium (0.1mm)":"Medium","High (0.001mm)":"High"}
         quality=q_map.get(self.combo_quality.currentText(),"High")
         if hasattr(self,'exp_prog'):
@@ -2269,8 +2291,9 @@ class TripLyWindow(QMainWindow):
         <style> ul { margin-top: 4px; } li { margin-bottom: 4px; } </style>
         <p><b>What's new:</b></p>
         <ul>
-          <li><b>TPMS diagonal artifacts fixed</b> — boundary sealing now void (+1.0) producing a closed mesh; clean intersection with no flat-plane artifacts</li>
-          <li><b>Shell retry logic</b> — automatically retries with flipped inner mesh winding if shell comes back empty</li>
+          <li><b>Shell-on fixed</b> — correct outer shell with lattice infill inside</li>
+          <li><b>Crash log</b> — automatically saved to ~/Downloads/triplyam-crash.log</li>
+          <li><b>Export Debug Log</b> — button in Export tab for diagnosis</li>
         </ul>
         <p style='color:#888; font-size:11px;'>
         Full changelog available in Settings → About TriplyAM → Changelog tab.
@@ -2357,7 +2380,17 @@ class TripLyWindow(QMainWindow):
         </style>
 
         <!-- !! UPDATE THIS CHANGELOG ON EVERY RELEASE — add new h3 at top !! -->
+        <!-- !! UPDATE THIS CHANGELOG ON EVERY RELEASE !! -->
         <h3>0.4.5 — Beta <span class='tag'>current</span></h3>
+        <ul>
+          <li>Shell boolean fixed — part-(inner-lattice) replaces shell+lattice union; outer shell now full size</li>
+          <li>inner_m winding flip restored for mcOffsetMesh negative volume output</li>
+          <li>Crash log written to ~/Downloads/triplyam-crash.log automatically</li>
+          <li>Export Debug Log button in Export tab</li>
+          <li>3MF version string tracks app version (no longer hardcoded)</li>
+        </ul>
+
+                <h3>0.4.2 — Beta</h3>
         <ul>
           <li>Shell-on inversion fixed — removed incorrect manifold winding flips that were inverting lattice and shell; boolean operations now correct</li>
           <li>Voronoi (Random) — renamed from Voronoi, same algorithm</li>
@@ -2627,16 +2660,15 @@ if __name__=="__main__":
     try:
         main()
     except Exception as e:
-        # !! DO NOT CHANGE CRASH LOG LOCATIONS — always write to BOTH paths !!
-        _log = _os.path.expanduser("~/.triply-crash.log")
-        _downloads = _os.path.join(_os.path.expanduser("~"), "Downloads", "triplyam-crash.log")
+        # !! DO NOT CHANGE CRASH LOG LOCATIONS !!
         _tb = traceback.format_exc()
-        with open(_log, "a") as _f:
-            _f.write(_tb)
-        try:
-            _os.makedirs(_os.path.dirname(_downloads), exist_ok=True)
-            with open(_downloads, "a") as _f:
-                _f.write(_tb)
-        except Exception:
-            pass
+        for _p in [
+            _os.path.expanduser("~/.triply-crash.log"),
+            _os.path.join(_os.path.expanduser("~"), "Downloads", "triplyam-crash.log"),
+        ]:
+            try:
+                _os.makedirs(_os.path.dirname(_p), exist_ok=True)
+                open(_p, "a").write(_tb)
+            except Exception:
+                pass
         raise

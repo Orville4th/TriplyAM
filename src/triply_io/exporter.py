@@ -11,6 +11,7 @@ import numpy as np
 from datetime import datetime
 
 APP_NAME    = "TriplyAM"
+# !! UPDATE APP_VERSION ON EVERY RELEASE !!
 APP_VERSION = "0.4.5"
 APP_URL     = "https://github.com/Orville4th/TriplyAM"
 
