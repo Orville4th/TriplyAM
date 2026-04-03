@@ -622,9 +622,9 @@ def _generate_shell_lattice(sv, sf, mins, maxs, wall_thickness, cell_size,
     _log.debug(f"shell: part vol={part_m.volume():.1f}, inner vol={inner_m.volume():.1f}")
 
     # mcOffsetMesh consistently returns inverted normals (negative volume).
-    # Flip winding if volume <= 0 so part_m - inner_m gives a correct hollow shell.
-    # Without this flip: part_m - negative_inner = part_m + inner = solid block.
-    _log.debug(f"shell: inner_m vol before flip check={inner_m.volume():.1f}")
+    # Flip winding when volume <= 0 so part_m - inner_m gives a hollow shell.
+    # Without this: part_m - negative_inner_m = union = solid block.
+    _log.debug(f"shell: inner_m vol before flip={inner_m.volume():.1f}")
     if inner_m.is_empty() or inner_m.volume() <= 0:
         inner_m = _to_manifold(iv, ifc[:, [0,2,1]].astype(np.int32))
         _log.debug(f"shell: flipped inner_m, vol now={inner_m.volume():.1f}")
