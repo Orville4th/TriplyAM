@@ -11,7 +11,7 @@ import numpy as np
 from datetime import datetime
 
 APP_NAME    = "TriplyAM"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.4.5"
 APP_URL     = "https://github.com/Orville4th/TriplyAM"
 
 QUALITY_PRESETS = {
