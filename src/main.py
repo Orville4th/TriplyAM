@@ -1963,7 +1963,7 @@ class TripLyWindow(QMainWindow):
         shutil.copy2(log_src, path)
         QMessageBox.information(self, "Export Log", f"Debug log saved to:\n{path}")
 
-        def _save_path(self, default_name):
+    def _save_path(self, default_name):
         base=os.path.splitext(default_name)[0]
         path,_ = QFileDialog.getSaveFileName(
             self, "Export", os.path.join(self._last_export_dir, base + ".3mf"),
