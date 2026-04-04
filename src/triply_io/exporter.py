@@ -12,7 +12,7 @@ from datetime import datetime
 
 APP_NAME    = "TriplyAM"
 # !! UPDATE APP_VERSION ON EVERY RELEASE !!
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_URL     = "https://github.com/Orville4th/TriplyAM"
 
 QUALITY_PRESETS = {
